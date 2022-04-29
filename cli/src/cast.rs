@@ -250,6 +250,7 @@ async fn main() -> eyre::Result<()> {
             args,
             gas,
             gas_price,
+            priority_fee,
             value,
             mut nonce,
             legacy,
@@ -284,6 +285,7 @@ async fn main() -> eyre::Result<()> {
                             (sig, args),
                             gas,
                             gas_price,
+                            priority_fee,
                             value,
                             nonce,
                             eth.chain,
@@ -303,6 +305,7 @@ async fn main() -> eyre::Result<()> {
                             (sig, args),
                             gas,
                             gas_price,
+                            priority_fee,
                             value,
                             nonce,
                             eth.chain,
@@ -322,6 +325,7 @@ async fn main() -> eyre::Result<()> {
                             (sig, args),
                             gas,
                             gas_price,
+                            priority_fee,
                             value,
                             nonce,
                             eth.chain,
@@ -349,6 +353,7 @@ async fn main() -> eyre::Result<()> {
                     (sig, args),
                     gas,
                     gas_price,
+                    priority_fee,
                     value,
                     nonce,
                     eth.chain,
@@ -802,6 +807,7 @@ async fn cast_send<M: Middleware, F: Into<NameOrAddress>, T: Into<NameOrAddress>
     args: (String, Vec<String>),
     gas: Option<U256>,
     gas_price: Option<U256>,
+    priority_fee: Option<U256>,
     value: Option<U256>,
     nonce: Option<U256>,
     chain: Chain,
@@ -823,6 +829,7 @@ where
         .await?
         .gas(gas)
         .gas_price(gas_price)
+        .priority_fee(priority_fee)
         .value(value)
         .nonce(nonce)
         .etherscan_api_key(etherscan_api_key);

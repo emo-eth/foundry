@@ -92,6 +92,23 @@ impl<'a, M: Middleware> TxBuilder<'a, M> {
         self
     }
 
+    pub fn set_priority_fee(&mut self, v: U256) -> &mut Self {
+        self.tx = match self.tx.clone() {
+            TypedTransaction::Eip1559(eip1559_tx_request) => TypedTransaction::Eip1559(
+                eip1559_tx_request.max_priority_fee_per_gas(v),
+            ),
+            _ => panic!()
+        };
+        self
+    }
+
+    pub fn priority_fee(&mut self, v:Option<U256>) -> &mut Self {
+        if let Some(value) = v {
+            self.set_priority_fee(value);
+        }
+        self
+    }
+
     /// Set value
     pub fn set_value(&mut self, v: U256) -> &mut Self {
         self.tx.set_value(v);
