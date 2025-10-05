@@ -19,7 +19,7 @@ use clap::{Parser, ValueHint};
 use eyre::{Context, OptionExt, Result, bail};
 use foundry_cli::{
     opts::{BuildOpts, EvmArgs, GlobalArgs},
-    utils::{self, LoadConfig},
+    utils::{self, FoundryPathExt, LoadConfig},
 };
 use foundry_common::{EmptyTestFilter, TestFunctionExt, compile::ProjectCompiler, fs, shell};
 use foundry_compilers::{
@@ -360,10 +360,11 @@ impl TestArgs {
             .networks(evm_opts.networks)
             .fail_fast(self.fail_fast)
             .set_coverage(coverage)
-            .build::<MultiCompiler>(project_root, output, env, evm_opts)?;
+            .build::<MultiCompiler>(project_root, output, env.clone(), evm_opts.clone())?;
 
         let libraries = runner.libraries.clone();
-        let mut outcome = self.run_tests_inner(runner, config, verbosity, filter, output).await?;
+        let mut outcome =
+            self.run_tests_inner(runner.clone(), config.clone(), verbosity, filter, output).await?;
 
         if should_draw {
             let (suite_name, test_name, mut test_result) =
@@ -435,7 +436,7 @@ impl TestArgs {
         }
 
         // All test have been run once before reaching this point
-        if should_mutate {
+        if self.mutate.is_some() {
             // check outcome here, stop if any test failed
             // @todo rather set non-allowed failed tests in config and ensure_ok() here?
             // @todo other checks: no fork (or just exclude based on clap arg?)
@@ -445,7 +446,7 @@ impl TestArgs {
 
             let mutate_paths = if let Some(pattern) = &self.mutate_path {
                 // If --mutate-path is provided, use it to filter paths
-                source_files_iter(&project.paths.sources, MultiCompilerLanguage::FILE_EXTENSIONS)
+                source_files_iter(&config.src, MultiCompilerLanguage::FILE_EXTENSIONS)
                     .filter(|entry| {
                         // @todo filter out interfaces here?
                         // we do it in lexing for now
@@ -454,7 +455,7 @@ impl TestArgs {
                     .collect()
             } else if let Some(contract_pattern) = &self.mutate_contract {
                 // If --mutate-contract is provided, use it to filter contracts
-                source_files_iter(&project.paths.sources, MultiCompilerLanguage::FILE_EXTENSIONS)
+                source_files_iter(&config.src, MultiCompilerLanguage::FILE_EXTENSIONS)
                     .filter(|entry| {
                         entry.is_sol()
                             && !entry.is_sol_test()
@@ -466,7 +467,7 @@ impl TestArgs {
                     .collect()
             } else if self.mutate.as_ref().unwrap().is_empty() {
                 // If --mutate is passed without arguments, use all Solidity files
-                source_files_iter(&project.paths.sources, MultiCompilerLanguage::FILE_EXTENSIONS)
+                source_files_iter(&config.src, MultiCompilerLanguage::FILE_EXTENSIONS)
                     .filter(|entry| entry.is_sol() && !entry.is_sol_test())
                     .collect()
             } else {
@@ -536,6 +537,7 @@ impl TestArgs {
                         .dynamic_test_linking(config.dynamic_test_linking)
                         .quiet(true);
 
+                    let project = config.project()?;
                     let compile_output = compiler.compile(&project);
 
                     if compile_output.is_err() {
@@ -546,11 +548,10 @@ impl TestArgs {
                         ));
                     } else {
                         let mut runner = MultiContractRunnerBuilder::new(config.clone())
-                            .set_debug(false)
                             .initial_balance(evm_opts.initial_balance)
                             .evm_spec(config.evm_spec_id())
                             .sender(evm_opts.sender)
-                            .odyssey(evm_opts.odyssey)
+                            .with_fork(evm_opts.get_fork(&config, env.clone()))
                             .build::<MultiCompiler>(
                                 &config.root,
                                 &compile_output.unwrap(),
@@ -561,7 +562,7 @@ impl TestArgs {
                         let results: BTreeMap<String, SuiteResult> =
                             runner.test_collect(&new_filter)?;
 
-                        let outcome = TestOutcome::new(results, self.allow_failure);
+                        let outcome = TestOutcome::new(Some(runner), results, self.allow_failure);
                         if outcome.failures().count() > 0 {
                             mutation_summary.add_dead_mutant(mutant.clone());
                             results_vec.push((
@@ -589,7 +590,7 @@ impl TestArgs {
 
             MutationReporter::new().report(&mutation_summary);
 
-            outcome = TestOutcome::empty(true);
+            outcome = TestOutcome::empty(Some(runner), false);
         }
 
         Ok(outcome)

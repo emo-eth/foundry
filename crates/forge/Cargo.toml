@@ -48,6 +48,10 @@ forge-lint.workspace = true
 forge-verify.workspace = true
 forge-script.workspace = true
 forge-sol-macro-gen.workspace = true
+
+# mutation testing
+solar-parse.workspace = true
+solar-interface.workspace = true
 foundry-cli.workspace = true
 foundry-debugger.workspace = true
 
@@ -97,6 +101,7 @@ soldeer-commands.workspace = true
 quick-junit = "0.5.1"
 
 [dev-dependencies]
+rstest.workspace = true
 alloy-hardforks.workspace = true
 anvil.workspace = true
 forge-script-sequence.workspace = true

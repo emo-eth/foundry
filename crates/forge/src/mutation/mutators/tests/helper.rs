@@ -1,7 +1,7 @@
-use crate::mutation::{mutators::Mutator, visitor::MutantVisitor, Session};
+use crate::mutation::{Session, mutators::Mutator, visitor::MutantVisitor};
 use solar_parse::{
-    ast::{interface::source_map::FileName, visit::Visit, Arena},
     Parser,
+    ast::{Arena, interface::source_map::FileName, visit::Visit},
 };
 
 use std::path::PathBuf;
@@ -14,14 +14,15 @@ pub struct MutatorTestCase<'a> {
 }
 
 pub trait MutatorTester {
-    fn test_mutator<M: Mutator + 'static>(mutator: M, test_case: MutatorTestCase<'_>) {
-        let arena = Arena::new();
+    fn test_mutator<M: Mutator + Send + 'static>(mutator: M, test_case: MutatorTestCase<'_>) {
         let sess = Session::builder().with_silent_emitter(None).build();
 
-        // let mut mutations: Vec<Mutant> = Vec::new();
-        let mut mutant_visitor = MutantVisitor::new_with_mutators(vec![Box::new(mutator)]);
-
         let _ = sess.enter(|| -> solar_parse::interface::Result<()> {
+            // let mut mutations: Vec<Mutant> = Vec::new();
+            let mut mutant_visitor =
+                MutantVisitor::new_with_mutators(PathBuf::from(""), vec![Box::new(mutator)]);
+
+            let arena = Arena::new();
             let mut parser = Parser::from_lazy_source_code(
                 &sess,
                 &arena,
@@ -31,7 +32,7 @@ pub trait MutatorTester {
 
             let ast = parser.parse_file().map_err(|e| e.emit())?;
 
-            mutant_visitor.visit_source_unit(&ast);
+            let _ = mutant_visitor.visit_source_unit(&ast);
 
             let mutations = mutant_visitor.mutation_to_conduct;
 

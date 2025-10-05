@@ -8,8 +8,8 @@ use crate::mutation::{
 };
 
 #[derive(Debug, Clone)]
-pub enum AssignVarTypes {
-    Literal(LitKind),
+pub enum AssignVarTypes<'a> {
+    Literal(LitKind<'a>),
     Identifier(String), /* not using Ident as the symbol is slow to convert as to_str() <--
                          * maybe will have to switch back if validating more aggressively */
 }

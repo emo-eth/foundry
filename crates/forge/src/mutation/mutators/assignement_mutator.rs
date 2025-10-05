@@ -30,7 +30,7 @@ impl Mutator for AssignmentMutator {
                     Mutant {
                         span: replacement_span,
                         mutation: MutationType::Assignment(AssignVarTypes::Literal(
-                            LitKind::Number(num_bigint::BigInt::ZERO),
+                            LitKind::Number(alloy_primitives::U256::ZERO),
                         )),
                         path: context.path.clone(),
                     },
@@ -50,7 +50,7 @@ impl Mutator for AssignmentMutator {
                 Mutant {
                     span: replacement_span,
                     mutation: MutationType::Assignment(AssignVarTypes::Literal(LitKind::Number(
-                        num_bigint::BigInt::ZERO,
+                        alloy_primitives::U256::ZERO,
                     ))),
                     path: context.path.clone(),
                 },
@@ -86,7 +86,7 @@ impl Mutator for AssignmentMutator {
     }
 }
 
-fn extract_rhs_info(context: &MutationContext<'_>) -> Option<(AssignVarTypes, Span)> {
+fn extract_rhs_info<'a>(context: &MutationContext<'a>) -> Option<(AssignVarTypes<'a>, Span)> {
     let relevant_expr_for_rhs = if let Some(var_definition) = context.var_definition {
         var_definition.initializer.as_ref()?
     } else if let Some(expr) = context.expr {

@@ -3,6 +3,7 @@ mod mutators;
 mod reporter;
 mod visitor;
 
+use alloy_primitives::U256;
 // Generate mutants then run tests (reuse the whole unit test flow for now, including compilation to
 // select mutants) Use Solar:
 use solar_parse::{
@@ -405,7 +406,7 @@ impl MutationHandler {
                                         let lit_kind = match lit.as_str() {
                                             "true" => solar_parse::ast::LitKind::Bool(true),
                                             "false" => solar_parse::ast::LitKind::Bool(false),
-                                            _ => solar_parse::ast::LitKind::Number(0u64.into()),
+                                            _ => solar_parse::ast::LitKind::Number(U256::ZERO),
                                         };
                                         crate::mutation::mutant::MutationType::Assignment(
                                             crate::mutation::visitor::AssignVarTypes::Literal(
@@ -470,6 +471,7 @@ impl MutationHandler {
                                             "PostDec" => solar_parse::ast::UnOpKind::PostDec,
                                             "Not" => solar_parse::ast::UnOpKind::Not,
                                             "BitNot" => solar_parse::ast::UnOpKind::BitNot,
+                                            "Neg" => solar_parse::ast::UnOpKind::Neg,
                                             other => panic!(
                                                 "Unknown unary operator token in cache: {}",
                                                 other

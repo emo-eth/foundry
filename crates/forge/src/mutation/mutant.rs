@@ -1,7 +1,6 @@
 // Generate mutants then run tests (reuse the whole unit test flow for now, including compilation to
 // select mutants) Use Solar:
 use super::visitor::AssignVarTypes;
-use solar_interface::SourceMap;
 use solar_parse::ast::{BinOpKind, LitKind, Span, UnOpKind};
 use std::{fmt::Display, path::PathBuf};
 
@@ -42,7 +41,7 @@ pub enum MutationType {
     /// int: replace x with 0; replace x with -x (temp: this is mutated for uint as well)
     ///
     /// For a binary op y: apply BinaryOp(y)
-    Assignment(AssignVarTypes),
+    Assignment(AssignVarTypes<'static>),
 
     /// For a binary op y in BinOpKind ("+", "-", ">=", etc)
     /// replace y with each non-y in op
@@ -88,7 +87,7 @@ pub enum MutationType {
 }
 
 impl MutationType {
-    fn get_name(&self) -> String {
+    pub fn get_name(&self) -> String {
         match self {
             Self::Assignment(var_type) => match var_type {
                 AssignVarTypes::Literal(kind) => {
@@ -175,7 +174,6 @@ impl Display for Mutant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solar_parse::ast::{BinOpKind, LitKind, Span, UnOpKind};
 
     #[test]
     fn test_mutation_type_get_name() {
@@ -188,7 +186,7 @@ mod tests {
 
         assert_eq!(MutationType::BinaryOp(BinOpKind::Add).get_name(), "BinaryOp_Add");
 
-        let lit_num = LitKind::Number(123.into());
+        let lit_num = LitKind::Number(alloy_primitives::U256::from(123u64));
         assert_eq!(
             MutationType::Assignment(AssignVarTypes::Literal(lit_num)).get_name(),
             "Assignment_number"
