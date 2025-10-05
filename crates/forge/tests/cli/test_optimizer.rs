@@ -93,7 +93,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "Counter.t.sol",
@@ -120,8 +121,9 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
-    // All files are compiled on first run.
+    )
+    .unwrap();
+    // All 20 files are compiled on first run.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
 Compiling 21 files with [..]
@@ -146,7 +148,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that only 1 file is compiled (Counter source contract) and both tests fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -174,7 +177,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that only 1 file is compiled (Counter source contract) and only one test fails.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -212,7 +216,8 @@ interface CounterIf {
     function increment() external;
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_source(
         "Counter.sol",
         r#"
@@ -230,7 +235,8 @@ contract Counter is CounterIf {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "Counter.t.sol",
@@ -257,7 +263,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // All 21 files are compiled on first run.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -280,7 +287,8 @@ interface CounterIf {
     function increment() external;
 }
     "#,
-    );
+    )
+    .unwrap();
     // All 3 files (interface, implementation and test) are compiled.
     cmd.with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -308,7 +316,8 @@ contract Counter is CounterIf {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that only 1 file is compiled (Counter source contract) and both tests fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -351,7 +360,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "mock/CounterMock.sol",
@@ -375,7 +385,8 @@ contract CounterMock {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_test(
         "Counter.t.sol",
         r#"
@@ -401,7 +412,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // 20 files plus one mock file are compiled on first run.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -427,7 +439,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that only 1 file is compiled (Counter source contract) and both tests fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -460,7 +473,8 @@ contract CounterMock {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that mock and test files are compiled and no test fails.
     cmd.with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -503,7 +517,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "mock/CounterMock.sol",
@@ -513,7 +528,8 @@ import {Counter} from "src/Counter.sol";
 contract CounterMock is Counter {
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_test(
         "Counter.t.sol",
         r#"
@@ -539,7 +555,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // 20 files plus one mock file are compiled on first run.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -565,7 +582,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert Counter source contract and CounterTest test contract (as it imports mock) are
     // compiled and both tests fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
@@ -594,7 +612,8 @@ contract CounterMock is Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that CounterMock and CounterTest files are compiled and no test fails.
     cmd.with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -637,7 +656,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "mock/CounterMock.sol",
@@ -647,7 +667,8 @@ import {Counter} from "src/Counter.sol";
 contract CounterMock is Counter {
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_test(
         "Counter.t.sol",
         r#"
@@ -673,7 +694,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // 20 files plus one mock file are compiled on first run.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -706,7 +728,8 @@ contract CounterMock {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that CounterMock and CounterTest files are compiled and tests fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -748,7 +771,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_source(
         "CounterA.sol",
         r#"
@@ -766,7 +790,8 @@ contract CounterA {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Contract with constructor args without name.
     prj.add_source(
         "CounterB.sol",
@@ -783,7 +808,8 @@ contract CounterB {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_source(
         "v1/Counter.sol",
         r#"
@@ -799,7 +825,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "Counter.t.sol",
@@ -842,7 +869,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // 22 files plus one mock file are compiled on first run.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -873,7 +901,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only v1/Counter should be compiled and test should fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -906,7 +935,8 @@ contract CounterA {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only CounterA should be compiled and test should fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -937,7 +967,8 @@ contract CounterB {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only CounterB should be compiled and test should fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -968,7 +999,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only Counter should be compiled and test should fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -1010,7 +1042,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_source(
         "CounterWithSalt.sol",
         r#"
@@ -1030,7 +1063,8 @@ contract CounterWithSalt {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "Counter.t.sol",
@@ -1052,7 +1086,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -1084,7 +1119,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only Counter should be compiled and test should fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -1116,7 +1152,8 @@ contract CounterWithSalt {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only Counter should be compiled and test should fail.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -1149,7 +1186,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "Counter.t.sol",
@@ -1171,7 +1209,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // All 20 files are compiled on first run.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -1194,7 +1233,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that only 1 file is compiled (Counter source contract) and revert test fails.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -1220,7 +1260,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that only 1 file is compiled (Counter source contract) and revert test fails.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -1246,7 +1287,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Assert that only 1 file is compiled (Counter source contract) and emit test fails.
     cmd.with_no_redact().assert_failure().stdout_eq(str![[r#"
 ...
@@ -1278,7 +1320,8 @@ contract Counter {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "Counter.t.sol",
@@ -1292,7 +1335,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // All 20 files should properly compile.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -1334,7 +1378,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     cmd.args(["test", "--decode-internal", "-vvvv"]).assert_success().stdout_eq(str![[r#"
 [COMPILING_FILES] with [SOLC_VERSION]
@@ -1356,6 +1401,8 @@ Traces:
     ├─ [..] Counter::number() [staticcall]
     │   └─ ← [Return] 1
     ├─ [..] StdAssertions::assertEq(1, 1)
+    │   ├─ [0] VM::assertEq(1, 1) [staticcall]
+    │   │   └─ ← [Return]
     │   └─ ← 
     └─ ← [Stop]
 
@@ -1381,7 +1428,8 @@ contract CounterA {
     uint256 number;
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_source(
         "CounterB.sol",
         r#"
@@ -1393,7 +1441,8 @@ contract CounterB {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     prj.add_source(
         "CounterC.sol",
         r#"
@@ -1405,7 +1454,8 @@ contract CounterC {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
 
     prj.add_test(
         "Counter.t.sol",
@@ -1443,7 +1493,8 @@ contract CounterTest is Test {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // All 23 files should properly compile, tests pass.
     cmd.args(["test"]).with_no_redact().assert_success().stdout_eq(str![[r#"
 ...
@@ -1469,7 +1520,8 @@ contract CounterB {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only CounterB should compile.
     cmd.assert_failure().stdout_eq(str![[r#"
 ...
@@ -1495,7 +1547,8 @@ contract CounterC {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only CounterC should compile.
     cmd.assert_failure().stdout_eq(str![[r#"
 ...
@@ -1521,7 +1574,8 @@ contract CounterC {
     }
 }
     "#,
-    );
+    )
+    .unwrap();
     // Only CounterC should compile and revert.
     cmd.assert_failure().stdout_eq(str![[r#"
 ...

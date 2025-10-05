@@ -1,5 +1,4 @@
 use super::ScriptResult;
-use crate::build::LinkedBuildData;
 use alloy_dyn_abi::JsonAbiExt;
 use alloy_primitives::{Address, B256, TxKind, hex};
 use eyre::Result;
@@ -147,10 +146,8 @@ impl ScriptTransactionBuilder {
         mut self,
         result: &ScriptResult,
         gas_estimate_multiplier: u64,
-        linked_build_data: &LinkedBuildData,
     ) -> Self {
-        let mut created_contracts =
-            result.get_created_contracts(&linked_build_data.known_contracts);
+        let mut created_contracts = result.get_created_contracts();
 
         // Add the additional contracts created in this transaction, so we can verify them later.
         created_contracts.retain(|contract| {

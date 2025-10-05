@@ -13,10 +13,6 @@ contract HelloWorld {
      */
     Person public theDude;
 
-    /// Will this long comment be wrapped leaving
-    /// orphan words?
-    Person public anotherDude;
-
     /// Constructs the dude
     /// @param age The dude's age
     constructor(uint256 age) {

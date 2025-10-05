@@ -16,7 +16,7 @@ workspace = true
 [dependencies]
 foundry-config.workspace = true
 foundry-common.workspace = true
-foundry-compilers.workspace = true
+foundry-compilers = { workspace = true, features = ["full"] }
 
 serde.workspace = true
 eyre.workspace = true

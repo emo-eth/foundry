@@ -3,7 +3,7 @@
 //! Main Foundry EVM backend abstractions.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
 #[macro_use]
 extern crate tracing;
@@ -11,7 +11,6 @@ extern crate tracing;
 pub mod executors;
 pub mod inspectors;
 
-pub use foundry_evm_core as core;
 pub use foundry_evm_core::{
     Env, EnvMut, EvmEnv, InspectorExt, backend, constants, decode, fork, opts, utils,
 };

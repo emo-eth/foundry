@@ -3,7 +3,7 @@
 //! Foundry cheatcodes implementations.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 #![allow(elided_lifetimes_in_paths)] // Cheats context uses 3 lifetimes
 
 #[macro_use]
@@ -90,17 +90,26 @@ pub(crate) trait Cheatcode: CheatcodeDef + DynCheatcode {
     }
 }
 
-pub(crate) trait DynCheatcode: 'static + std::fmt::Debug {
+pub(crate) trait DynCheatcode: 'static {
     fn cheatcode(&self) -> &'static spec::Cheatcode<'static>;
+
+    fn as_debug(&self) -> &dyn std::fmt::Debug;
 
     fn dyn_apply(&self, ccx: &mut CheatsCtxt, executor: &mut dyn CheatcodesExecutor) -> Result;
 }
 
 impl<T: Cheatcode> DynCheatcode for T {
+    #[inline]
     fn cheatcode(&self) -> &'static spec::Cheatcode<'static> {
         Self::CHEATCODE
     }
 
+    #[inline]
+    fn as_debug(&self) -> &dyn std::fmt::Debug {
+        self
+    }
+
+    #[inline]
     fn dyn_apply(&self, ccx: &mut CheatsCtxt, executor: &mut dyn CheatcodesExecutor) -> Result {
         self.apply_full(ccx, executor)
     }
@@ -153,16 +162,8 @@ impl std::ops::DerefMut for CheatsCtxt<'_, '_, '_, '_> {
 }
 
 impl CheatsCtxt<'_, '_, '_, '_> {
-    pub(crate) fn ensure_not_precompile(&self, address: &Address) -> Result<()> {
-        if self.is_precompile(address) { Err(precompile_error(address)) } else { Ok(()) }
-    }
-
+    #[inline]
     pub(crate) fn is_precompile(&self, address: &Address) -> bool {
-        self.ecx.journaled_state.warm_addresses.precompiles().contains(address)
+        self.ecx.journaled_state.inner.precompiles.contains(address)
     }
-}
-
-#[cold]
-fn precompile_error(address: &Address) -> Error {
-    fmt_err!("cannot use precompile {address} as an argument")
 }

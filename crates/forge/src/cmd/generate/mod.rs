@@ -26,8 +26,6 @@ pub struct GenerateTestArgs {
 
 impl GenerateTestArgs {
     pub fn run(self) -> Result<()> {
-        sh_warn!("`forge generate` is deprecated and will be removed in a future version")?;
-
         let contract_name = format_identifier(&self.contract_name, true);
         let instance_name = format_identifier(&self.contract_name, false);
 

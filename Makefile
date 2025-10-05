@@ -46,16 +46,13 @@ build-%:
 
 .PHONY: docker-build-push
 docker-build-push: docker-build-prepare ## Build and push a cross-arch Docker image tagged with DOCKER_IMAGE_NAME.
-	# Build x86_64-unknown-linux-gnu.
-	cargo build --target x86_64-unknown-linux-gnu --features "jemalloc aws-kms gcp-kms cli asm-keccak js-tracer" --profile "$(PROFILE)"
+	FEATURES="jemalloc aws-kms gcp-kms cli asm-keccak" $(MAKE) build-x86_64-unknown-linux-gnu
 	mkdir -p $(BIN_DIR)/amd64
 	for bin in anvil cast chisel forge; do \
 		cp $(CARGO_TARGET_DIR)/x86_64-unknown-linux-gnu/$(PROFILE)/$$bin $(BIN_DIR)/amd64/; \
 	done
 
-	# Build aarch64-unknown-linux-gnu.
-	rustup target add aarch64-unknown-linux-gnu
-	RUSTFLAGS="-C linker=aarch64-linux-gnu-gcc" cargo build --target aarch64-unknown-linux-gnu --features "aws-kms gcp-kms cli asm-keccak js-tracer" --profile "$(PROFILE)"
+	FEATURES="aws-kms gcp-kms cli asm-keccak" $(MAKE) build-aarch64-unknown-linux-gnu
 	mkdir -p $(BIN_DIR)/arm64
 	for bin in anvil cast chisel forge; do \
 		cp $(CARGO_TARGET_DIR)/aarch64-unknown-linux-gnu/$(PROFILE)/$$bin $(BIN_DIR)/arm64/; \
@@ -64,7 +61,7 @@ docker-build-push: docker-build-prepare ## Build and push a cross-arch Docker im
 	docker buildx build --file ./Dockerfile.cross . \
 		--platform linux/amd64,linux/arm64 \
 		$(foreach tag,$(shell echo $(DOCKER_IMAGE_NAME) | tr ',' ' '),--tag $(tag)) \
-		--provenance=true \
+		--provenance=false \
 		--push
 
 .PHONY: docker-build-prepare
@@ -79,15 +76,6 @@ docker-build-prepare: ## Prepare the Docker build environment.
 	fi
 
 ##@ Test
-
-## Run unit/doc tests and generate html coverage report in `target/llvm-cov/html` folder.
-## Notice that `llvm-cov` supports doc tests only in nightly builds because the `--doc` flag 
-## is unstable (https://github.com/taiki-e/cargo-llvm-cov/issues/2).
-.PHONY: test-coverage
-test-coverage: 
-	cargo +nightly llvm-cov --no-report nextest -E 'kind(test) & !test(/\b(issue|ext_integration)/)' && \
-	cargo +nightly llvm-cov --no-report --doc && \
-	cargo +nightly llvm-cov report --doctests --open
 
 .PHONY: test-unit
 test-unit: ## Run unit tests.
@@ -120,7 +108,7 @@ lint-clippy: ## Run clippy on the codebase.
 .PHONY: lint-typos
 lint-typos: ## Run typos on the codebase.
 	@command -v typos >/dev/null || { \
-		echo "typos not found. Please install it by running the command `cargo install typos-cli` or refer to the following link for more information: https://github.com/crate-ci/typos"; \
+		echo "typos not found. Please install it by running the command `cargo install typos-cli` or refer to the following link for more information: https://github.com/crate-ci/typos" \
 		exit 1; \
 	}
 	typos

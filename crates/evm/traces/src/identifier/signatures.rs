@@ -83,7 +83,7 @@ impl Serialize for SignaturesCache {
 
 impl SignaturesCache {
     /// Loads the cache from a file.
-    #[instrument(target = "evm::traces", name = "SignaturesCache::load")]
+    #[instrument(target = "evm::traces")]
     pub fn load(path: &Path) -> Self {
         trace!(target: "evm::traces", ?path, "reading signature cache");
         fs::read_json_file(path)
@@ -94,7 +94,7 @@ impl SignaturesCache {
     }
 
     /// Saves the cache to a file.
-    #[instrument(target = "evm::traces", name = "SignaturesCache::save", skip(self))]
+    #[instrument(target = "evm::traces", skip(self))]
     pub fn save(&self, path: &Path) {
         if let Some(parent) = path.parent()
             && let Err(err) = std::fs::create_dir_all(parent)
@@ -149,12 +149,9 @@ impl SignaturesCache {
 /// An identifier that tries to identify functions and events using signatures found at
 /// `https://openchain.xyz` or a local cache.
 #[derive(Clone, Debug)]
-pub struct SignaturesIdentifier(Arc<SignaturesIdentifierInner>);
-
-#[derive(Debug)]
-struct SignaturesIdentifierInner {
+pub struct SignaturesIdentifier {
     /// Cached selectors for functions, events and custom errors.
-    cache: RwLock<SignaturesCache>,
+    cache: Arc<RwLock<SignaturesCache>>,
     /// Location where to save the signature cache.
     cache_path: Option<PathBuf>,
     /// The OpenChain client to fetch signatures from. `None` if disabled on construction.
@@ -185,16 +182,17 @@ impl SignaturesIdentifier {
         } else {
             Default::default()
         };
-        Ok(Self(Arc::new(SignaturesIdentifierInner {
-            cache: RwLock::new(cache),
-            cache_path,
-            client,
-        })))
+        Ok(Self { cache: Arc::new(RwLock::new(cache)), cache_path, client })
     }
 
     /// Saves the cache to the file system.
     pub fn save(&self) {
-        self.0.save();
+        if let Some(path) = &self.cache_path {
+            self.cache
+                .try_read()
+                .expect("SignaturesIdentifier cache is locked while attempting to save")
+                .save(path);
+        }
     }
 
     /// Identifies `Function`s.
@@ -243,20 +241,20 @@ impl SignaturesIdentifier {
         }
         trace!(target: "evm::traces", ?selectors, "identifying selectors");
 
-        let mut cache_r = self.0.cache.read().await;
-        if let Some(client) = &self.0.client {
+        let mut cache_r = self.cache.read().await;
+        if let Some(client) = &self.client {
             let query =
                 selectors.iter().copied().filter(|v| !cache_r.contains_key(v)).collect::<Vec<_>>();
             if !query.is_empty() {
                 drop(cache_r);
-                let mut cache_w = self.0.cache.write().await;
+                let mut cache_w = self.cache.write().await;
                 if let Ok(res) = client.decode_selectors(&query).await {
                     for (selector, signatures) in std::iter::zip(query, res) {
                         cache_w.signatures.insert(selector, signatures.into_iter().next());
                     }
                 }
                 drop(cache_w);
-                cache_r = self.0.cache.read().await;
+                cache_r = self.cache.read().await;
             }
         }
         selectors.iter().map(|selector| cache_r.get(selector).unwrap_or_default()).collect()
@@ -272,21 +270,7 @@ impl SignaturesIdentifier {
     }
 }
 
-impl SignaturesIdentifierInner {
-    fn save(&self) {
-        // We only identify new signatures if the client is enabled.
-        if let Some(path) = &self.cache_path
-            && self.client.is_some()
-        {
-            self.cache
-                .try_read()
-                .expect("SignaturesIdentifier cache is locked while attempting to save")
-                .save(path);
-        }
-    }
-}
-
-impl Drop for SignaturesIdentifierInner {
+impl Drop for SignaturesIdentifier {
     fn drop(&mut self) {
         self.save();
     }

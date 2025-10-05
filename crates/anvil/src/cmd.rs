@@ -12,7 +12,6 @@ use clap::Parser;
 use core::fmt;
 use foundry_common::shell;
 use foundry_config::{Chain, Config, FigmentProviders};
-use foundry_evm_networks::NetworkConfigs;
 use futures::FutureExt;
 use rand_08::{SeedableRng, rngs::StdRng};
 use std::{
@@ -218,7 +217,7 @@ impl NodeArgs {
 
         let hardfork = match &self.hardfork {
             Some(hf) => {
-                if self.evm.networks.optimism {
+                if self.evm.optimism {
                     Some(OpHardfork::from_str(hf)?.into())
                 } else {
                     Some(EthereumHardfork::from_str(hf)?.into())
@@ -278,9 +277,9 @@ impl NodeArgs {
             .with_init_state(self.load_state.or_else(|| self.state.and_then(|s| s.state)))
             .with_transaction_block_keeper(self.transaction_block_keeper)
             .with_max_persisted_states(self.max_persisted_states)
-            .with_networks(self.evm.networks)
+            .with_optimism(self.evm.optimism)
+            .with_odyssey(self.evm.odyssey)
             .with_disable_default_create2_deployer(self.evm.disable_default_create2_deployer)
-            .with_disable_pool_balance_checks(self.evm.disable_pool_balance_checks)
             .with_slots_in_an_epoch(self.slots_in_an_epoch)
             .with_memory_limit(self.evm.memory_limit)
             .with_cache_path(self.cache_path))
@@ -296,14 +295,7 @@ impl NodeArgs {
             let mut rng = rand_08::thread_rng();
             let mnemonic = match Mnemonic::<English>::new_with_count(&mut rng, count) {
                 Ok(mnemonic) => mnemonic.to_phrase(),
-                Err(err) => {
-                    warn!(target: "node", ?count, %err, "failed to generate mnemonic, falling back to 12-word random mnemonic");
-                    // Fallback: generate a valid 12-word random mnemonic instead of using
-                    // DEFAULT_MNEMONIC
-                    Mnemonic::<English>::new_with_count(&mut rng, 12)
-                        .expect("valid default word count")
-                        .to_phrase()
-                }
+                Err(_) => DEFAULT_MNEMONIC.to_string(),
             };
             generator = generator.phrase(mnemonic);
         } else if let Some(seed) = self.mnemonic_seed {
@@ -457,7 +449,7 @@ pub struct AnvilEvmArgs {
     )]
     pub fork_block_number: Option<i128>,
 
-    /// Fetch state from after a specific transaction hash has been applied over a remote endpoint.
+    /// Fetch state from a specific transaction hash over a remote endpoint.
     ///
     /// See --fork-url.
     #[arg(
@@ -592,20 +584,21 @@ pub struct AnvilEvmArgs {
     #[arg(long, visible_alias = "auto-unlock")]
     pub auto_impersonate: bool,
 
+    /// Run an Optimism chain
+    #[arg(long, visible_alias = "optimism")]
+    pub optimism: bool,
+
     /// Disable the default create2 deployer
     #[arg(long, visible_alias = "no-create2")]
     pub disable_default_create2_deployer: bool,
-
-    /// Disable pool balance checks
-    #[arg(long)]
-    pub disable_pool_balance_checks: bool,
 
     /// The memory limit per EVM execution in bytes.
     #[arg(long)]
     pub memory_limit: Option<u64>,
 
-    #[command(flatten)]
-    pub networks: NetworkConfigs,
+    /// Enable Odyssey features
+    #[arg(long, alias = "alphanet")]
+    pub odyssey: bool,
 }
 
 /// Resolves an alias passed as fork-url to the matching url defined in the rpc_endpoints section

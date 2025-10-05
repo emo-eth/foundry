@@ -6,10 +6,7 @@ mod console;
 pub use console::{ConsoleFmt, FormatSpec, console_format};
 
 mod dynamic;
-pub use dynamic::{
-    format_token, format_token_raw, format_tokens, format_tokens_raw, parse_tokens,
-    serialize_value_as_json,
-};
+pub use dynamic::{format_token, format_token_raw, format_tokens, format_tokens_raw, parse_tokens};
 
 mod exp;
 pub use exp::{format_int_exp, format_uint_exp, to_exp_notation};

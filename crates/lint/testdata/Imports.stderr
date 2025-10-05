@@ -1,104 +1,88 @@
 note[unaliased-plain-import]: use named imports '{A, B}' or alias 'import ".." as X'
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL | import "./auxiliary/ImportsSomeFile.sol";
-   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+40 | import "./auxiliary/ImportsSomeFile.sol";
+   |        ---------------------------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unaliased-plain-import
 
 note[unaliased-plain-import]: use named imports '{A, B}' or alias 'import ".." as X'
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL | import "./auxiliary/ImportsAnotherFile.sol";
-   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+41 | import "./auxiliary/ImportsAnotherFile.sol";
+   |        ------------------------------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unaliased-plain-import
 
 note[unused-import]: unused imports should be removed
+ --> ROOT/testdata/Imports.sol:LL:CC
+  |
+4 |     symbol2 as notUsed,
+  |     ------------------
+  |
+  = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
+
+note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     symbol2 as notUsed,
-   |     ^^^^^^^^^^^^^^^^^^
+10 |     docSymbolWrongTag,
+   |     -----------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 
 note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     docSymbol,
-   |     ^^^^^^^^^
+13 |     symbolNotUsed,
+   |     -------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 
 note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     docSymbol2,
-   |     ^^^^^^^^^^
+15 |     IContractNotUsed
+   |     ----------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 
 note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     docSymbolWrongTag,
-   |     ^^^^^^^^^^^^^^^^^
+26 |     symbolNotUsed3
+   |     --------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 
 note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     symbolNotUsed,
-   |     ^^^^^^^^^^^^^
+31 |     CONSTANT_1
+   |     ----------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 
 note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     IContractNotUsed
-   |     ^^^^^^^^^^^^^^^^
+37 |     YetAnotherType
+   |     --------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 
 note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     symbolNotUsed3
-   |     ^^^^^^^^^^^^^^
+44 | import "./auxiliary/ImportsAnotherFile2.sol" as AnotherFile2;
+   | -------------------------------------------------------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 
 note[unused-import]: unused imports should be removed
   --> ROOT/testdata/Imports.sol:LL:CC
    |
-LL |     CONSTANT_1
-   |     ^^^^^^^^^^
-   |
-   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
-
-note[unused-import]: unused imports should be removed
-  --> ROOT/testdata/Imports.sol:LL:CC
-   |
-LL |     YetAnotherType
-   |     ^^^^^^^^^^^^^^
-   |
-   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
-
-note[unused-import]: unused imports should be removed
-  --> ROOT/testdata/Imports.sol:LL:CC
-   |
-LL | import "./auxiliary/ImportsAnotherFile2.sol" as AnotherFile2;
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
-
-note[unused-import]: unused imports should be removed
-  --> ROOT/testdata/Imports.sol:LL:CC
-   |
-LL | import * as OtherUtils from "./auxiliary/ImportsUtils2.sol";
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+47 | import * as OtherUtils from "./auxiliary/ImportsUtils2.sol";
+   | ------------------------------------------------------------
    |
    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unused-import
 

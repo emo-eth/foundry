@@ -4,9 +4,9 @@ use super::{
 };
 use foundry_compilers::Updates;
 use itertools::Itertools;
-use solar::sema::{
-    Gcx, Hir,
-    hir::{CallArgs, ContractId, Expr, ExprKind, NamedArg, Stmt, StmtKind, TypeKind, Visit},
+use solar_parse::interface::Session;
+use solar_sema::{
+    hir::{CallArgs, ContractId, Expr, ExprKind, Hir, NamedArg, Stmt, StmtKind, TypeKind, Visit},
     interface::{SourceMap, data_structures::Never, source_map::FileName},
 };
 use std::{
@@ -25,7 +25,8 @@ pub(crate) struct PreprocessorDependencies {
 
 impl PreprocessorDependencies {
     pub fn new(
-        gcx: Gcx<'_>,
+        sess: &Session,
+        hir: &Hir<'_>,
         paths: &[PathBuf],
         src_dir: &Path,
         root_dir: &Path,
@@ -33,9 +34,9 @@ impl PreprocessorDependencies {
     ) -> Self {
         let mut preprocessed_contracts = BTreeMap::new();
         let mut referenced_contracts = HashSet::new();
-        for contract_id in gcx.hir.contract_ids() {
-            let contract = gcx.hir.contract(contract_id);
-            let source = gcx.hir.source(contract.source);
+        for contract_id in hir.contract_ids() {
+            let contract = hir.contract(contract_id);
+            let source = hir.source(contract.source);
 
             let FileName::Real(path) = &source.file.name else {
                 continue;
@@ -51,8 +52,8 @@ impl PreprocessorDependencies {
             // Do not collect dependencies for mock contracts. Walk through base contracts and
             // check if they're from src dir.
             if contract.linearized_bases.iter().any(|base_contract_id| {
-                let base_contract = gcx.hir.contract(*base_contract_id);
-                let FileName::Real(path) = &gcx.hir.source(base_contract.source).file.name else {
+                let base_contract = hir.contract(*base_contract_id);
+                let FileName::Real(path) = &hir.source(base_contract.source).file.name else {
                     return false;
                 };
                 path.starts_with(src_dir)
@@ -68,8 +69,12 @@ impl PreprocessorDependencies {
                 mocks.remove(&root_dir.join(path));
             }
 
-            let mut deps_collector =
-                BytecodeDependencyCollector::new(gcx, source.file.src.as_str(), src_dir);
+            let mut deps_collector = BytecodeDependencyCollector::new(
+                sess.source_map(),
+                hir,
+                source.file.src.as_str(),
+                src_dir,
+            );
             // Analyze current contract.
             let _ = deps_collector.walk_contract(contract);
             // Ignore empty test contracts declared in source files with other contracts.
@@ -117,30 +122,44 @@ pub(crate) struct BytecodeDependency {
 }
 
 /// Walks over contract HIR and collects [`BytecodeDependency`]s and referenced contracts.
-struct BytecodeDependencyCollector<'gcx, 'src> {
+struct BytecodeDependencyCollector<'hir> {
     /// Source map, used for determining contract item locations.
-    gcx: Gcx<'gcx>,
+    source_map: &'hir SourceMap,
+    /// Parsed HIR.
+    hir: &'hir Hir<'hir>,
     /// Source content of current contract.
-    src: &'src str,
+    src: &'hir str,
     /// Project source dir, used to determine if referenced contract is a source contract.
-    src_dir: &'src Path,
+    src_dir: &'hir Path,
     /// Dependencies collected for current contract.
     dependencies: Vec<BytecodeDependency>,
     /// Unique HIR ids of contracts referenced from current contract.
     referenced_contracts: HashSet<ContractId>,
 }
 
-impl<'gcx, 'src> BytecodeDependencyCollector<'gcx, 'src> {
-    fn new(gcx: Gcx<'gcx>, src: &'src str, src_dir: &'src Path) -> Self {
-        Self { gcx, src, src_dir, dependencies: vec![], referenced_contracts: HashSet::default() }
+impl<'hir> BytecodeDependencyCollector<'hir> {
+    fn new(
+        source_map: &'hir SourceMap,
+        hir: &'hir Hir<'hir>,
+        src: &'hir str,
+        src_dir: &'hir Path,
+    ) -> Self {
+        Self {
+            source_map,
+            hir,
+            src,
+            src_dir,
+            dependencies: vec![],
+            referenced_contracts: HashSet::default(),
+        }
     }
 
     /// Collects reference identified as bytecode dependency of analyzed contract.
     /// Discards any reference that is not in project src directory (e.g. external
     /// libraries or mock contracts that extend source contracts).
     fn collect_dependency(&mut self, dependency: BytecodeDependency) {
-        let contract = self.gcx.hir.contract(dependency.referenced_contract);
-        let source = self.gcx.hir.source(contract.source);
+        let contract = self.hir.contract(dependency.referenced_contract);
+        let source = self.hir.source(contract.source);
         let FileName::Real(path) = &source.file.name else {
             return;
         };
@@ -156,19 +175,19 @@ impl<'gcx, 'src> BytecodeDependencyCollector<'gcx, 'src> {
     }
 }
 
-impl<'gcx> Visit<'gcx> for BytecodeDependencyCollector<'gcx, '_> {
+impl<'hir> Visit<'hir> for BytecodeDependencyCollector<'hir> {
     type BreakValue = Never;
 
-    fn hir(&self) -> &'gcx Hir<'gcx> {
-        &self.gcx.hir
+    fn hir(&self) -> &'hir Hir<'hir> {
+        self.hir
     }
 
-    fn visit_expr(&mut self, expr: &'gcx Expr<'gcx>) -> ControlFlow<Self::BreakValue> {
+    fn visit_expr(&mut self, expr: &'hir Expr<'hir>) -> ControlFlow<Self::BreakValue> {
         match &expr.kind {
             ExprKind::Call(call_expr, call_args, named_args) => {
                 if let Some(dependency) = handle_call_expr(
                     self.src,
-                    self.gcx.sess.source_map(),
+                    self.source_map,
                     expr,
                     call_expr,
                     call_args,
@@ -186,7 +205,7 @@ impl<'gcx> Visit<'gcx> for BytecodeDependencyCollector<'gcx, '_> {
                 {
                     self.collect_dependency(BytecodeDependency {
                         kind: BytecodeDependencyKind::CreationCode,
-                        loc: span_to_range(self.gcx.sess.source_map(), expr.span),
+                        loc: span_to_range(self.source_map, expr.span),
                         referenced_contract: contract_id,
                     });
                 }
@@ -196,12 +215,12 @@ impl<'gcx> Visit<'gcx> for BytecodeDependencyCollector<'gcx, '_> {
         self.walk_expr(expr)
     }
 
-    fn visit_stmt(&mut self, stmt: &'gcx Stmt<'gcx>) -> ControlFlow<Self::BreakValue> {
+    fn visit_stmt(&mut self, stmt: &'hir Stmt<'hir>) -> ControlFlow<Self::BreakValue> {
         if let StmtKind::Try(stmt_try) = stmt.kind
             && let ExprKind::Call(call_expr, call_args, named_args) = &stmt_try.expr.kind
             && let Some(dependency) = handle_call_expr(
                 self.src,
-                self.gcx.sess.source_map(),
+                self.source_map,
                 &stmt_try.expr,
                 call_expr,
                 call_args,
@@ -285,14 +304,14 @@ fn named_arg(
 /// Goes over all test/script files and replaces bytecode dependencies with cheatcode
 /// invocations.
 pub(crate) fn remove_bytecode_dependencies(
-    gcx: Gcx<'_>,
+    hir: &Hir<'_>,
     deps: &PreprocessorDependencies,
     data: &PreprocessorData,
 ) -> Updates {
     let mut updates = Updates::default();
     for (contract_id, deps) in &deps.preprocessed_contracts {
-        let contract = gcx.hir.contract(*contract_id);
-        let source = gcx.hir.source(contract.source);
+        let contract = hir.contract(*contract_id);
+        let source = hir.source(contract.source);
         let FileName::Real(path) = &source.file.name else {
             continue;
         };

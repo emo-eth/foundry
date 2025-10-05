@@ -126,7 +126,7 @@ EOF
 FIRST_FILE=1
 SYSTEM_INFO=""
 
-for bench_file in "forge_test_bench.md" "forge_isolate_test_bench.md" "forge_build_bench.md" "forge_coverage_bench.md"; do
+for bench_file in "forge_test_bench.md" "forge_build_bench.md" "forge_coverage_bench.md"; do
     if [ -f "$OUTPUT_DIR/$bench_file" ]; then
         echo "Processing $bench_file..."
         
@@ -134,9 +134,6 @@ for bench_file in "forge_test_bench.md" "forge_isolate_test_bench.md" "forge_bui
         case "$bench_file" in
             "forge_test_bench.md")
                 SECTION_NAME="Forge Test"
-                ;;
-            "forge_isolate_test_bench.md")
-                SECTION_NAME="Forge Test (Isolated)"
                 ;;
             "forge_build_bench.md")
                 SECTION_NAME="Forge Build"

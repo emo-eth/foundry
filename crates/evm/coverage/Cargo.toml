@@ -24,4 +24,3 @@ revm.workspace = true
 semver.workspace = true
 tracing.workspace = true
 rayon.workspace = true
-solar.workspace = true

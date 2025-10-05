@@ -91,10 +91,10 @@ interface FunctionInterfaces {
 }
 
 contract FunctionDefinitions {
-    function f() external {}
+    function () external {}
     fallback () external {}
 
-    function f() external payable {}
+    function () external payable {}
     fallback () external payable {}
     receive () external payable {}
 
@@ -214,11 +214,5 @@ contract FunctionOverrides is FunctionInterfaces, FunctionDefinitions {
     function oneParam(uint256 x) override(FunctionInterfaces, FunctionDefinitions, SomeOtherFunctionContract, SomeImport.AndAnotherFunctionContract) {
         a = 1;
     }
-
-    function simple(address _target, bytes memory _payload)
-        internal
-    {
-        a = 1;
-    }
-
 }
+

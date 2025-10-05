@@ -24,6 +24,10 @@ pub enum AnvilSubcommand {
     #[command(visible_alias = "com")]
     Completions {
         #[arg(value_enum)]
-        shell: foundry_cli::clap::Shell,
+        shell: clap_complete::Shell,
     },
+
+    /// Generate Fig autocompletion spec.
+    #[command(visible_alias = "fig")]
+    GenerateFigSpec,
 }

@@ -6,9 +6,12 @@ use foundry_compilers::{
 };
 use itertools::Itertools;
 use serde_json::Value;
-use solar::{
-    ast::{self, Span},
-    interface::Session,
+use solar_parse::{
+    Parser,
+    ast::{
+        Arena, CommentKind, Item, ItemKind,
+        interface::{self, Session},
+    },
 };
 use std::{collections::BTreeMap, path::Path};
 
@@ -19,7 +22,7 @@ pub struct NatSpec {
     pub contract: String,
     /// The function annotated with the natspec. None if the natspec is contract-level.
     pub function: Option<String>,
-    /// The line the natspec begins, in the form `line:column`, i.e. `10:21`.
+    /// The line the natspec appears, in the form `row:col:length`, i.e. `10:21:122`.
     pub line: String,
     /// The actual natspec comment, without slashes or block punctuation.
     pub docs: String,
@@ -29,46 +32,28 @@ impl NatSpec {
     /// Factory function that extracts a vector of [`NatSpec`] instances from
     /// a solc compiler output. The root path is to express contract base dirs.
     /// That is essential to match per-test configs at runtime.
-    #[instrument(name = "NatSpec::parse", skip_all)]
     pub fn parse(output: &ProjectCompileOutput, root: &Path) -> Vec<Self> {
         let mut natspecs: Vec<Self> = vec![];
 
-        let compiler = output.parser().solc().compiler();
-        let solar = SolarParser::new(compiler.sess());
         let solc = SolcParser::new();
+        let solar = SolarParser::new();
         for (id, artifact) in output.artifact_ids() {
-            let path = id.source.as_path();
-            let path = path.strip_prefix(root).unwrap_or(path);
-            let abs_path = &*root.join(path);
+            let abs_path = id.source.as_path();
+            let path = abs_path.strip_prefix(root).unwrap_or(abs_path);
             let contract_name = id.name.split('.').next().unwrap();
             // `id.identifier` but with the stripped path.
             let contract = format!("{}:{}", path.display(), id.name);
 
-            let mut used_solar = false;
-            compiler.enter_sequential(|compiler| {
-                if let Some((_, source)) = compiler.gcx().get_ast_source(abs_path)
-                    && let Some(ast) = &source.ast
-                {
-                    solar.parse_ast(&mut natspecs, ast, &contract, contract_name);
-                    used_solar = true;
-                }
-            });
-
-            if !used_solar {
-                warn!(?abs_path, %contract, "could not parse natspec with solar");
-            }
-
-            let mut used_solc = false;
-            if !used_solar
-                && let Some(ast) = &artifact.ast
+            let mut used_solc_ast = false;
+            if let Some(ast) = &artifact.ast
                 && let Some(node) = solc.contract_root_node(&ast.nodes, &contract)
             {
                 solc.parse(&mut natspecs, &contract, node, true);
-                used_solc = true;
+                used_solc_ast = true;
             }
 
-            if !used_solar && !used_solc {
-                warn!(?abs_path, %contract, "could not parse natspec");
+            if !used_solc_ast && let Ok(src) = std::fs::read_to_string(abs_path) {
+                solar.parse(&mut natspecs, &src, &contract, contract_name);
             }
         }
 
@@ -217,27 +202,31 @@ impl SolcParser {
     }
 }
 
-struct SolarParser<'a> {
-    sess: &'a Session,
+struct SolarParser {
+    _private: (),
 }
 
-impl<'a> SolarParser<'a> {
-    fn new(sess: &'a Session) -> Self {
-        Self { sess }
+impl SolarParser {
+    fn new() -> Self {
+        Self { _private: () }
     }
 
-    fn parse_ast(
+    fn parse(
         &self,
         natspecs: &mut Vec<NatSpec>,
-        source_unit: &ast::SourceUnit<'_>,
+        src: &str,
         contract_id: &str,
         contract_name: &str,
     ) {
-        let mut handle_docs = |item: &ast::Item<'_>| {
+        // Fast path to avoid parsing the file.
+        if !src.contains(INLINE_CONFIG_PREFIX) {
+            return;
+        }
+
+        let mut handle_docs = |item: &Item<'_>| {
             if item.docs.is_empty() {
                 return;
             }
-            let mut span = Span::DUMMY;
             let lines = item
                 .docs
                 .iter()
@@ -246,10 +235,9 @@ impl<'a> SolarParser<'a> {
                     if !s.contains(INLINE_CONFIG_PREFIX) {
                         return None;
                     }
-                    span = if span.is_dummy() { d.span } else { span.to(d.span) };
                     match d.kind {
-                        ast::CommentKind::Line => Some(s.trim().to_string()),
-                        ast::CommentKind::Block => Some(
+                        CommentKind::Line => Some(s.trim().to_string()),
+                        CommentKind::Block => Some(
                             s.lines()
                                 .filter(|line| line.contains(INLINE_CONFIG_PREFIX))
                                 .map(|line| line.trim_start().trim_start_matches('*').trim())
@@ -262,9 +250,11 @@ impl<'a> SolarParser<'a> {
             if lines.is_empty() {
                 return;
             }
+            let span =
+                item.docs.iter().map(|doc| doc.span).reduce(|a, b| a.to(b)).unwrap_or_default();
             natspecs.push(NatSpec {
                 contract: contract_id.to_string(),
-                function: if let ast::ItemKind::Function(f) = &item.kind {
+                function: if let ItemKind::Function(f) = &item.kind {
                     Some(
                         f.header
                             .name
@@ -274,52 +264,14 @@ impl<'a> SolarParser<'a> {
                 } else {
                     None
                 },
-                line: {
-                    let (_, loc) = self.sess.source_map().span_to_location_info(span);
-                    format!("{}:{}", loc.lo.line, loc.lo.col.0 + 1)
-                },
+                line: format!("{}:{}:0", span.lo().0, span.hi().0),
                 docs: lines,
             });
         };
 
-        for item in source_unit.items.iter() {
-            let ast::ItemKind::Contract(c) = &item.kind else { continue };
-            if c.name.as_str() != contract_name {
-                continue;
-            }
-
-            // Handle contract level doc comments.
-            handle_docs(item);
-
-            // Handle function level doc comments.
-            for item in c.body.iter() {
-                let ast::ItemKind::Function(_) = &item.kind else { continue };
-                handle_docs(item);
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use snapbox::{assert_data_eq, str};
-    use solar::parse::{
-        Parser,
-        ast::{Arena, interface},
-    };
-
-    fn parse(natspecs: &mut Vec<NatSpec>, src: &str, contract_id: &str, contract_name: &str) {
-        // Fast path to avoid parsing the file.
-        if !src.contains(INLINE_CONFIG_PREFIX) {
-            return;
-        }
-
         let sess = Session::builder()
             .with_silent_emitter(Some("Inline config parsing failed".to_string()))
             .build();
-        let solar = SolarParser::new(&sess);
         let _ = sess.enter(|| -> interface::Result<()> {
             let arena = Arena::new();
 
@@ -332,11 +284,31 @@ mod tests {
 
             let source_unit = parser.parse_file().map_err(|e| e.emit())?;
 
-            solar.parse_ast(natspecs, &source_unit, contract_id, contract_name);
+            for item in source_unit.items.iter() {
+                let ItemKind::Contract(c) = &item.kind else { continue };
+                if c.name.as_str() != contract_name {
+                    continue;
+                }
+
+                // Handle contract level doc comments.
+                handle_docs(item);
+
+                // Handle function level doc comments.
+                for item in c.body.iter() {
+                    let ItemKind::Function(_) = &item.kind else { continue };
+                    handle_docs(item);
+                }
+            }
 
             Ok(())
         });
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
     #[test]
     fn can_reject_invalid_profiles() {
@@ -393,45 +365,41 @@ function f2() {} /** forge-config: default.fuzz.runs = 800 */ function f3() {}
 }
 ";
         let mut natspecs = vec![];
-        parse(&mut natspecs, src, "path.sol:C", "C");
-        assert_data_eq!(
-            format!("{natspecs:#?}"),
-            str![[r#"
-[
-    NatSpec {
-        contract: "path.sol:C",
-        function: Some(
-            "f1",
-        ),
-        line: "2:14",
-        docs: "forge-config: default.fuzz.runs = 600/nforge-config: default.fuzz.runs = 601",
-    },
-    NatSpec {
-        contract: "path.sol:C",
-        function: Some(
-            "f2",
-        ),
-        line: "7:8",
-        docs: "forge-config: default.fuzz.runs = 700",
-    },
-    NatSpec {
-        contract: "path.sol:C",
-        function: Some(
-            "f3",
-        ),
-        line: "8:18",
-        docs: "forge-config: default.fuzz.runs = 800",
-    },
-    NatSpec {
-        contract: "path.sol:C",
-        function: Some(
-            "f4",
-        ),
-        line: "10:1",
-        docs: "forge-config: default.fuzz.runs = 1024/nforge-config: default.fuzz.max-test-rejects = 500",
-    },
-]
-"#]]
+        let id = || "path.sol:C".to_string();
+        let solar_parser = SolarParser::new();
+        solar_parser.parse(&mut natspecs, src, &id(), "C");
+        assert_eq!(
+            natspecs,
+            [
+                // f1
+                NatSpec {
+                    contract: id(),
+                    function: Some("f1".to_string()),
+                    line: "14:134:0".to_string(),
+                    docs: "forge-config: default.fuzz.runs = 600\nforge-config: default.fuzz.runs = 601".to_string(),
+                },
+                // f2
+                NatSpec {
+                    contract: id(),
+                    function: Some("f2".to_string()),
+                    line: "164:208:0".to_string(),
+                    docs: "forge-config: default.fuzz.runs = 700".to_string(),
+                },
+                // f3
+                NatSpec {
+                    contract: id(),
+                    function: Some("f3".to_string()),
+                    line: "226:270:0".to_string(),
+                    docs: "forge-config: default.fuzz.runs = 800".to_string(),
+                },
+                // f4
+                NatSpec {
+                    contract: id(),
+                    function: Some("f4".to_string()),
+                    line: "289:391:0".to_string(),
+                    docs: "forge-config: default.fuzz.runs = 1024\nforge-config: default.fuzz.max-test-rejects = 500".to_string(),
+                },
+            ]
         );
     }
 
@@ -454,21 +422,19 @@ contract FuzzInlineConf is DSTest {
 }
         "#;
         let mut natspecs = vec![];
-        parse(&mut natspecs, src, "inline/FuzzInlineConf.t.sol:FuzzInlineConf", "FuzzInlineConf");
-        assert_data_eq!(
-            format!("{natspecs:#?}"),
-            str![[r#"
-[
-    NatSpec {
-        contract: "inline/FuzzInlineConf.t.sol:FuzzInlineConf",
-        function: Some(
-            "testInlineConfFuzz",
-        ),
-        line: "8:5",
-        docs: "forge-config: default.fuzz.runs = 1024/nforge-config: default.fuzz.max-test-rejects = 500",
-    },
-]
-"#]]
+        let solar = SolarParser::new();
+        let id = || "inline/FuzzInlineConf.t.sol:FuzzInlineConf".to_string();
+        solar.parse(&mut natspecs, src, &id(), "FuzzInlineConf");
+        assert_eq!(
+            natspecs,
+            [
+                NatSpec {
+                    contract: id(),
+                    function: Some("testInlineConfFuzz".to_string()),
+                    line: "141:255:0".to_string(),
+                    docs: "forge-config: default.fuzz.runs = 1024\nforge-config: default.fuzz.max-test-rejects = 500".to_string(),
+                },
+            ]
         );
     }
 
@@ -507,8 +473,8 @@ contract FuzzInlineConf is DSTest {
 
     fn natspec() -> NatSpec {
         let conf = r"
-        forge-config: default.fuzz.runs = 600
-        forge-config: ci.fuzz.runs = 500
+        forge-config: default.fuzz.runs = 600 
+        forge-config: ci.fuzz.runs = 500 
         ========= SOME NOISY TEXT =============
          䩹𧀫Jx닧Ʀ̳盅K擷􅟽Ɂw첊}ꏻk86ᖪk-檻ܴ렝[ǲ𐤬oᘓƤ
         ꣖ۻ%Ƅ㪕ς:(饁΍av/烲ڻ̛߉橞㗡𥺃̹M봓䀖ؿ̄󵼁)𯖛d􂽰񮍃
@@ -545,44 +511,31 @@ contract FuzzInlineConf2 is DSTest {
 }
         "#;
         let mut natspecs = vec![];
-        parse(&mut natspecs, src, "inline/FuzzInlineConf.t.sol:FuzzInlineConf", "FuzzInlineConf");
-        assert_data_eq!(
-            format!("{natspecs:#?}"),
-            str![[r#"
-[
-    NatSpec {
-        contract: "inline/FuzzInlineConf.t.sol:FuzzInlineConf",
-        function: Some(
-            "testInlineConfFuzz1",
-        ),
-        line: "8:6",
-        docs: "forge-config: default.fuzz.runs = 1",
-    },
-]
-"#]]
+        let solar = SolarParser::new();
+        let id = || "inline/FuzzInlineConf.t.sol:FuzzInlineConf".to_string();
+        solar.parse(&mut natspecs, src, &id(), "FuzzInlineConf");
+        assert_eq!(
+            natspecs,
+            [NatSpec {
+                contract: id(),
+                function: Some("testInlineConfFuzz1".to_string()),
+                line: "142:181:0".to_string(),
+                docs: "forge-config: default.fuzz.runs = 1".to_string(),
+            },]
         );
 
         let mut natspecs = vec![];
-        parse(
-            &mut natspecs,
-            src,
-            "inline/FuzzInlineConf2.t.sol:FuzzInlineConf2",
-            "FuzzInlineConf2",
-        );
-        assert_data_eq!(
-            format!("{natspecs:#?}"),
-            str![[r#"
-[
-    NatSpec {
-        contract: "inline/FuzzInlineConf2.t.sol:FuzzInlineConf2",
-        function: Some(
-            "testInlineConfFuzz2",
-        ),
-        line: "13:5",
-        docs: "forge-config: default.fuzz.runs = 2",
-    },
-]
-"#]]
+        let id = || "inline/FuzzInlineConf2.t.sol:FuzzInlineConf2".to_string();
+        solar.parse(&mut natspecs, src, &id(), "FuzzInlineConf2");
+        assert_eq!(
+            natspecs,
+            [NatSpec {
+                contract: id(),
+                function: Some("testInlineConfFuzz2".to_string()),
+                line: "264:303:0".to_string(),
+                // should not get config from previous contract
+                docs: "forge-config: default.fuzz.runs = 2".to_string(),
+            },]
         );
     }
 
@@ -602,27 +555,25 @@ contract FuzzInlineConf is DSTest {
     function testInlineConfFuzz2() {}
 }"#;
         let mut natspecs = vec![];
-        parse(&mut natspecs, src, "inline/FuzzInlineConf.t.sol:FuzzInlineConf", "FuzzInlineConf");
-        assert_data_eq!(
-            format!("{natspecs:#?}"),
-            str![[r#"
-[
-    NatSpec {
-        contract: "inline/FuzzInlineConf.t.sol:FuzzInlineConf",
-        function: None,
-        line: "7:1",
-        docs: "forge-config: default.fuzz.runs = 1",
-    },
-    NatSpec {
-        contract: "inline/FuzzInlineConf.t.sol:FuzzInlineConf",
-        function: Some(
-            "testInlineConfFuzz1",
-        ),
-        line: "9:5",
-        docs: "forge-config: default.fuzz.runs = 3",
-    },
-]
-"#]]
+        let solar = SolarParser::new();
+        let id = || "inline/FuzzInlineConf.t.sol:FuzzInlineConf".to_string();
+        solar.parse(&mut natspecs, src, &id(), "FuzzInlineConf");
+        assert_eq!(
+            natspecs,
+            [
+                NatSpec {
+                    contract: id(),
+                    function: None,
+                    line: "101:140:0".to_string(),
+                    docs: "forge-config: default.fuzz.runs = 1".to_string(),
+                },
+                NatSpec {
+                    contract: id(),
+                    function: Some("testInlineConfFuzz1".to_string()),
+                    line: "181:220:0".to_string(),
+                    docs: "forge-config: default.fuzz.runs = 3".to_string(),
+                }
+            ]
         );
     }
 }

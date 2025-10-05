@@ -285,8 +285,6 @@ pub struct Broadcast {
     pub depth: usize,
     /// Whether the prank stops by itself after the next call
     pub single_call: bool,
-    /// Whether `vm.deployCode` cheatcode is used to deploy from code.
-    pub deploy_from_code: bool,
 }
 
 /// Contains context for wallet management.
@@ -382,7 +380,6 @@ fn broadcast(ccx: &mut CheatsCtxt, new_origin: Option<&Address>, single_call: bo
         original_origin: ccx.ecx.tx.caller,
         depth,
         single_call,
-        deploy_from_code: false,
     };
     debug!(target: "cheatcodes", ?broadcast, "started");
     ccx.state.broadcast = Some(broadcast);

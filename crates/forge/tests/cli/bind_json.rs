@@ -48,7 +48,8 @@ contract BindJsonTest is Test {
     }
 }
 "#,
-    );
+    )
+    .unwrap();
 
     cmd.arg("bind-json").assert_success();
 

@@ -33,7 +33,7 @@ impl TypedValueParser for ChainValueParser {
             Ok(Chain::from_id(id))
         } else {
             // NamedChain::VARIANTS is a subset of all possible variants, since there are aliases:
-            // amoy instead of polygon-amoy etc
+            // mumbai instead of polygon-mumbai etc
             //
             // Parse first as NamedChain, if it fails parse with NamedChain::VARIANTS for displaying
             // the error to the user

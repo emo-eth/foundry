@@ -1,9 +1,10 @@
 use super::{install, test::filter::ProjectPathsAwareFilter, watch::WatchArgs};
 use crate::{
-    MultiContractRunner, MultiContractRunnerBuilder,
+    MultiContractRunner, MultiContractRunnerBuilder, TestFilter,
     decode::decode_console_logs,
     gas_report::GasReport,
-    multi_runner::matches_artifact,
+    multi_runner::matches_contract,
+    mutation::{MutationHandler, MutationReporter, MutationsSummary},
     result::{SuiteResult, TestOutcome, TestStatus},
     traces::{
         CallTraceDecoderBuilder, InternalTraceMode, TraceKind,
@@ -16,11 +17,12 @@ use alloy_primitives::U256;
 use chrono::Utc;
 use clap::{Parser, ValueHint};
 use eyre::{Context, OptionExt, Result, bail};
+use foundry_block_explorers::EtherscanApiVersion;
 use foundry_cli::{
-    opts::{BuildOpts, EvmArgs, GlobalArgs},
-    utils::{self, LoadConfig},
+    opts::{BuildOpts, GlobalArgs},
+    utils::{self, FoundryPathExt, LoadConfig},
 };
-use foundry_common::{EmptyTestFilter, TestFunctionExt, compile::ProjectCompiler, fs, shell};
+use foundry_common::{TestFunctionExt, compile::ProjectCompiler, evm::EvmArgs, fs, shell};
 use foundry_compilers::{
     ProjectCompileOutput,
     artifacts::output_selection::OutputSelection,
@@ -39,15 +41,12 @@ use foundry_config::{
     filter::GlobMatcher,
 };
 use foundry_debugger::Debugger;
-use foundry_evm::{
-    opts::EvmOpts,
-    traces::{backtrace::BacktraceBuilder, identifier::TraceIdentifiers},
-};
+use foundry_evm::traces::identifier::TraceIdentifiers;
 use regex::Regex;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, mpsc::channel},
     time::{Duration, Instant},
 };
@@ -148,6 +147,10 @@ pub struct TestArgs {
     #[arg(long, env = "ETHERSCAN_API_KEY", value_name = "KEY")]
     etherscan_api_key: Option<String>,
 
+    /// The Etherscan API version.
+    #[arg(long, env = "ETHERSCAN_API_VERSION", value_name = "VERSION")]
+    etherscan_api_version: Option<EtherscanApiVersion>,
+
     /// List tests instead of running them.
     #[arg(long, short, conflicts_with_all = ["show_progress", "decode_internal", "summary"], help_heading = "Display options")]
     list: bool,
@@ -184,10 +187,6 @@ pub struct TestArgs {
     #[arg(long, help_heading = "Display options", requires = "summary")]
     pub detailed: bool,
 
-    /// Disables the labels in the traces.
-    #[arg(long, help_heading = "Display options")]
-    pub disable_labels: bool,
-
     #[command(flatten)]
     filter: FilterArgs,
 
@@ -199,52 +198,96 @@ pub struct TestArgs {
 
     #[command(flatten)]
     pub watch: WatchArgs,
+
+    /// Enable mutation testing.
+    /// If passed with file paths, only those files will be tested.
+    #[arg(long, num_args(0..), value_name = "PATH")]
+    pub mutate: Option<Vec<PathBuf>>,
+
+    /// Specify which files to mutate with glob pattern matching.
+    #[arg(long, value_name = "PATTERN", requires = "mutate")]
+    pub mutate_path: Option<GlobMatcher>,
+
+    /// Only run tests in contracts matching the specified regex pattern.
+    #[arg(long, value_name = "REGEX", requires = "mutate")]
+    pub mutate_contract: Option<regex::Regex>,
 }
 
 impl TestArgs {
-    pub async fn run(mut self) -> Result<TestOutcome> {
+    pub async fn run(self) -> Result<TestOutcome> {
         trace!(target: "forge::test", "executing test command");
-        self.compile_and_run().await
+        self.execute_tests().await
     }
 
-    /// Returns a list of files that need to be compiled in order to run all the tests that match
-    /// the given filter.
-    ///
-    /// This means that it will return all sources that are not test contracts or that match the
-    /// filter. We want to compile all non-test sources always because tests might depend on them
-    /// dynamically through cheatcodes.
-    #[instrument(target = "forge::test", skip_all)]
+    /// Returns sources which include any tests to be executed.
+    /// If no filters are provided, sources are filtered by existence of test/invariant methods in
+    /// them, If filters are provided, sources are additionally filtered by them.
     pub fn get_sources_to_compile(
         &self,
         config: &Config,
-        test_filter: &ProjectPathsAwareFilter,
+        filter: &ProjectPathsAwareFilter,
     ) -> Result<BTreeSet<PathBuf>> {
-        // An empty filter doesn't filter out anything.
-        // We can still optimize slightly by excluding scripts.
-        if test_filter.is_empty() {
-            return Ok(source_files_iter(&config.src, MultiCompilerLanguage::FILE_EXTENSIONS)
-                .chain(source_files_iter(&config.test, MultiCompilerLanguage::FILE_EXTENSIONS))
-                .collect());
-        }
-
         let mut project = config.create_project(true, true)?;
         project.update_output_selection(|selection| {
             *selection = OutputSelection::common_output_selection(["abi".to_string()]);
         });
+
         let output = project.compile()?;
+
         if output.has_compiler_errors() {
             sh_println!("{output}")?;
             eyre::bail!("Compilation failed");
         }
 
-        Ok(output
-            .artifact_ids()
-            .filter_map(|(id, artifact)| artifact.abi.as_ref().map(|abi| (id, abi)))
-            .filter(|(id, abi)| {
-                id.source.starts_with(&config.src) || matches_artifact(test_filter, id, abi)
-            })
-            .map(|(id, _)| id.source)
-            .collect())
+        // ABIs of all sources
+        let abis = output
+            .into_artifacts()
+            .filter_map(|(id, artifact)| artifact.abi.map(|abi| (id, abi)))
+            .collect::<BTreeMap<_, _>>();
+
+        // Filter sources by their abis and contract names.
+        let mut test_sources = abis
+            .iter()
+            .filter(|(id, abi)| matches_contract(id, abi, filter))
+            .map(|(id, _)| id.source.clone())
+            .collect::<BTreeSet<_>>();
+
+        if test_sources.is_empty() {
+            if filter.is_empty() {
+                sh_println!(
+                    "No tests found in project! \
+                        Forge looks for functions that starts with `test`."
+                )?;
+            } else {
+                sh_println!("No tests match the provided pattern:")?;
+                sh_print!("{filter}")?;
+
+                // Try to suggest a test when there's no match
+                if let Some(test_pattern) = &filter.args().test_pattern {
+                    let test_name = test_pattern.as_str();
+                    let candidates = abis
+                        .into_iter()
+                        .filter(|(id, _)| {
+                            filter.matches_path(&id.source) && filter.matches_contract(&id.name)
+                        })
+                        .flat_map(|(_, abi)| abi.functions.into_keys())
+                        .collect::<Vec<_>>();
+                    if let Some(suggestion) = utils::did_you_mean(test_name, candidates).pop() {
+                        sh_println!("\nDid you mean `{suggestion}`?")?;
+                    }
+                }
+            }
+
+            eyre::bail!("No tests to run");
+        }
+
+        // Always recompile all sources to ensure that `getCode` cheatcode can use any artifact.
+        test_sources.extend(source_files_iter(
+            &project.paths.sources,
+            MultiCompilerLanguage::FILE_EXTENSIONS,
+        ));
+
+        Ok(test_sources)
     }
 
     /// Executes all the tests in the project.
@@ -253,9 +296,26 @@ impl TestArgs {
     /// configured filter will be executed
     ///
     /// Returns the test results for all matching tests.
-    pub async fn compile_and_run(&mut self) -> Result<TestOutcome> {
+    pub async fn execute_tests(mut self) -> Result<TestOutcome> {
         // Merge all configs.
-        let (mut config, evm_opts) = self.load_config_and_evm_opts()?;
+        let (mut config, mut evm_opts) = self.load_config_and_evm_opts()?;
+
+        // Explicitly enable isolation for gas reports for more correct gas accounting.
+        if self.gas_report {
+            evm_opts.isolate = true;
+        } else {
+            // Do not collect gas report traces if gas report is not enabled.
+            config.fuzz.gas_report_samples = 0;
+            config.invariant.gas_report_samples = 0;
+        }
+
+        let should_mutate = self.mutate.is_some();
+
+        // Force dyn test linking for mutation testing
+        if should_mutate {
+            config.dynamic_test_linking = true;
+            config.cache = true;
+        }
 
         // Install missing dependencies.
         if install::install_missing_dependencies(&mut config) && config.auto_detect_remappings {
@@ -269,37 +329,18 @@ impl TestArgs {
         let filter = self.filter(&config)?;
         trace!(target: "forge::test", ?filter, "using filter");
 
+        let sources_to_compile = self.get_sources_to_compile(&config, &filter)?;
+
         let compiler = ProjectCompiler::new()
             .dynamic_test_linking(config.dynamic_test_linking)
             .quiet(shell::is_json() || self.junit)
-            .files(self.get_sources_to_compile(&config, &filter)?);
+            .files(sources_to_compile);
+
         let output = compiler.compile(&project)?;
 
-        self.run_tests(&project.paths.root, config, evm_opts, &output, &filter, false).await
-    }
-
-    /// Executes all the tests in the project.
-    ///
-    /// See [`Self::compile_and_run`] for more details.
-    pub async fn run_tests(
-        &mut self,
-        project_root: &Path,
-        mut config: Config,
-        mut evm_opts: EvmOpts,
-        output: &ProjectCompileOutput,
-        filter: &ProjectPathsAwareFilter,
-        coverage: bool,
-    ) -> Result<TestOutcome> {
-        // Explicitly enable isolation for gas reports for more correct gas accounting.
-        if self.gas_report {
-            evm_opts.isolate = true;
-        } else {
-            // Do not collect gas report traces if gas report is not enabled.
-            config.fuzz.gas_report_samples = 0;
-            config.invariant.gas_report_samples = 0;
-        }
-
         // Create test options from general project settings and compiler output.
+        let project_root = &project.paths.root;
+
         let should_debug = self.debug;
         let should_draw = self.flamegraph || self.flamechart;
 
@@ -335,13 +376,12 @@ impl TestArgs {
             .sender(evm_opts.sender)
             .with_fork(evm_opts.get_fork(&config, env.clone()))
             .enable_isolation(evm_opts.isolate)
-            .networks(evm_opts.networks)
-            .fail_fast(self.fail_fast)
-            .set_coverage(coverage)
-            .build::<MultiCompiler>(project_root, output, env, evm_opts)?;
+            .odyssey(evm_opts.odyssey)
+            .build::<MultiCompiler>(project_root, &output, env.clone(), evm_opts.clone())?;
 
         let libraries = runner.libraries.clone();
-        let mut outcome = self.run_tests_inner(runner, config, verbosity, filter, output).await?;
+        let mut outcome =
+            self.run_tests(runner, config.clone(), verbosity, &filter, &output).await?;
 
         if should_draw {
             let (suite_name, test_name, mut test_result) =
@@ -390,7 +430,7 @@ impl TestArgs {
                 outcome.remove_first().ok_or_eyre("no tests were executed")?;
 
             let sources =
-                ContractSources::from_project_output(output, project_root, Some(&libraries))?;
+                ContractSources::from_project_output(&output, project.root(), Some(&libraries))?;
 
             // Run the debugger.
             let mut builder = Debugger::builder()
@@ -405,18 +445,176 @@ impl TestArgs {
             }
 
             let mut debugger = builder.build();
-            if let Some(dump_path) = &self.dump {
-                debugger.dump_to_file(dump_path)?;
+            if let Some(dump_path) = self.dump.clone() {
+                debugger.dump_to_file(&dump_path)?;
             } else {
                 debugger.try_run_tui()?;
             }
+        }
+
+        // All test have been run once before reaching this point
+        if should_mutate {
+            // check outcome here, stop if any test failed
+            // @todo rather set non-allowed failed tests in config and ensure_ok() here?
+            // @todo other checks: no fork (or just exclude based on clap arg?)
+            if outcome.failed() > 0 {
+                eyre::bail!("Cannot run mutation testing with failed tests");
+            }
+
+            let mutate_paths = if let Some(pattern) = &self.mutate_path {
+                // If --mutate-path is provided, use it to filter paths
+                source_files_iter(&project.paths.sources, MultiCompilerLanguage::FILE_EXTENSIONS)
+                    .filter(|entry| {
+                        // @todo filter out interfaces here?
+                        // we do it in lexing for now
+                        entry.is_sol() && !entry.is_sol_test() && pattern.is_match(entry)
+                    })
+                    .collect()
+            } else if let Some(contract_pattern) = &self.mutate_contract {
+                // If --mutate-contract is provided, use it to filter contracts
+                source_files_iter(&project.paths.sources, MultiCompilerLanguage::FILE_EXTENSIONS)
+                    .filter(|entry| {
+                        entry.is_sol()
+                            && !entry.is_sol_test()
+                            && output
+                                .artifact_ids()
+                                .find(|(id, _)| id.source == *entry)
+                                .is_some_and(|(id, _)| contract_pattern.is_match(&id.name))
+                    })
+                    .collect()
+            } else if self.mutate.as_ref().unwrap().is_empty() {
+                // If --mutate is passed without arguments, use all Solidity files
+                source_files_iter(&project.paths.sources, MultiCompilerLanguage::FILE_EXTENSIONS)
+                    .filter(|entry| entry.is_sol() && !entry.is_sol_test())
+                    .collect()
+            } else {
+                // If --mutate is passed with arguments, use those paths
+                self.mutate.as_ref().unwrap().clone()
+            };
+
+            sh_println!("Running mutation tests...").unwrap();
+            let mut mutation_summary = MutationsSummary::new();
+
+            for path in mutate_paths {
+                sh_println!("Running mutation tests for {}", path.display()).unwrap();
+
+                // Check if this file has already been tested and if the build id is the
+                // same - if so, just add the mutants to the summary
+                let mut handler = MutationHandler::new(path.clone(), config.clone());
+
+                handler.read_source_contract()?;
+
+                let build_id = output
+                    .artifact_ids()
+                    .find_map(
+                        |(id, _)| if id.source == path { Some(id.build_id.clone()) } else { None },
+                    )
+                    .unwrap_or_default();
+
+                // If we have cached results for these mutations and build id, use them and skip
+                // running tests
+                if let Some(prior) = handler.retrieve_cached_mutant_results(&build_id) {
+                    for (mutant, status) in prior {
+                        match status {
+                            crate::mutation::mutant::MutationResult::Dead => {
+                                mutation_summary.add_dead_mutant(mutant)
+                            }
+                            crate::mutation::mutant::MutationResult::Alive => {
+                                mutation_summary.add_survived_mutant(mutant)
+                            }
+                            crate::mutation::mutant::MutationResult::Invalid => {
+                                mutation_summary.update_invalid_mutant(mutant)
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Try cached mutants first
+                let mut mutants = if let Some(ms) = handler.retrieve_cached_mutants(&build_id) {
+                    ms
+                } else {
+                    // No cache match: generate fresh mutants
+                    handler.generate_ast().await;
+                    handler.mutations.clone()
+                };
+
+                // Accumulate per-mutant results for persistence
+                let mut results_vec: Vec<(
+                    crate::mutation::mutant::Mutant,
+                    crate::mutation::mutant::MutationResult,
+                )> = Vec::with_capacity(mutants.len());
+
+                for (i, mutant) in mutants.iter().enumerate() {
+                    sh_println!("Testing mutant {} out of {}", i + 1, mutants.len()).unwrap();
+
+                    handler.generate_mutated_solidity(&mutant);
+                    let new_filter = self.filter(&config).unwrap();
+                    let compiler = ProjectCompiler::new()
+                        .dynamic_test_linking(config.dynamic_test_linking)
+                        .quiet(true);
+
+                    let compile_output = compiler.compile(&project);
+
+                    if compile_output.is_err() {
+                        mutation_summary.update_invalid_mutant(mutant.clone());
+                        results_vec.push((
+                            mutant.clone(),
+                            crate::mutation::mutant::MutationResult::Invalid,
+                        ));
+                    } else {
+                        let mut runner = MultiContractRunnerBuilder::new(config.clone())
+                            .set_debug(false)
+                            .initial_balance(evm_opts.initial_balance)
+                            .evm_spec(config.evm_spec_id())
+                            .sender(evm_opts.sender)
+                            .odyssey(evm_opts.odyssey)
+                            .build::<MultiCompiler>(
+                                &config.root,
+                                &compile_output.unwrap(),
+                                env.clone(),
+                                evm_opts.clone(),
+                            )?;
+
+                        let results: BTreeMap<String, SuiteResult> =
+                            runner.test_collect(&new_filter)?;
+
+                        let outcome = TestOutcome::new(results, self.allow_failure);
+                        if outcome.failures().count() > 0 {
+                            mutation_summary.add_dead_mutant(mutant.clone());
+                            results_vec.push((
+                                mutant.clone(),
+                                crate::mutation::mutant::MutationResult::Dead,
+                            ));
+                        } else {
+                            mutation_summary.add_survived_mutant(mutant.clone());
+                            results_vec.push((
+                                mutant.clone(),
+                                crate::mutation::mutant::MutationResult::Alive,
+                            ));
+                        }
+                    }
+                }
+
+                handler.restore_original_source();
+
+                // If we generated fresh mutants, persist them for this build id
+                if handler.mutations.len() > 0 && !build_id.is_empty() {
+                    let _ = handler.persist_cached_mutants(&build_id, &handler.mutations);
+                    let _ = handler.persist_cached_results(&build_id, &results_vec);
+                }
+            }
+
+            MutationReporter::new().report(&mutation_summary);
+
+            outcome = TestOutcome::empty(true);
         }
 
         Ok(outcome)
     }
 
     /// Run all tests that matches the filter predicate from a test runner
-    async fn run_tests_inner(
+    pub async fn run_tests(
         &self,
         mut runner: MultiContractRunner,
         config: Arc<Config>,
@@ -434,32 +632,6 @@ impl TestArgs {
         let silent = self.gas_report && shell::is_json() || self.summary && shell::is_json();
 
         let num_filtered = runner.matching_test_functions(filter).count();
-
-        if num_filtered == 0 {
-            let mut total_tests = num_filtered;
-            if !filter.is_empty() {
-                total_tests = runner.matching_test_functions(&EmptyTestFilter::default()).count();
-            }
-            if total_tests == 0 {
-                sh_println!(
-                    "No tests found in project! Forge looks for functions that start with `test`"
-                )?;
-            } else {
-                let mut msg = format!("no tests match the provided pattern:\n{filter}");
-                // Try to suggest a test when there's no match.
-                if let Some(test_pattern) = &filter.args().test_pattern {
-                    let test_name = test_pattern.as_str();
-                    // Filter contracts but not test functions.
-                    let candidates = runner.all_test_functions(filter).map(|f| &f.name);
-                    if let Some(suggestion) = utils::did_you_mean(test_name, candidates).pop() {
-                        write!(msg, "\nDid you mean `{suggestion}`?")?;
-                    }
-                }
-                sh_warn!("{msg}")?;
-            }
-            return Ok(TestOutcome::empty(Some(runner), false));
-        }
-
         if num_filtered != 1 && (self.debug || self.flamegraph || self.flamechart) {
             let action = if self.flamegraph {
                 "generate a flamegraph"
@@ -499,13 +671,13 @@ impl TestArgs {
                 }
             });
             sh_println!("{}", serde_json::to_string(&results)?)?;
-            return Ok(TestOutcome::new(Some(runner), results, self.allow_failure));
+            return Ok(TestOutcome::new(results, self.allow_failure));
         }
 
         if self.junit {
             let results = runner.test_collect(filter)?;
             sh_println!("{}", junit_xml_report(&results, verbosity).to_string()?)?;
-            return Ok(TestOutcome::new(Some(runner), results, self.allow_failure));
+            return Ok(TestOutcome::new(results, self.allow_failure));
         }
 
         let remote_chain_id = runner.evm_opts.get_remote_chain_id().await;
@@ -519,7 +691,7 @@ impl TestArgs {
         let show_progress = config.show_progress;
         let handle = tokio::task::spawn_blocking({
             let filter = filter.clone();
-            move || runner.test(&filter, tx, show_progress).map(|()| runner)
+            move || runner.test(&filter, tx, show_progress)
         });
 
         // Set up trace identifiers.
@@ -534,7 +706,6 @@ impl TestArgs {
         // Build the trace decoder.
         let mut builder = CallTraceDecoderBuilder::new()
             .with_known_contracts(&known_contracts)
-            .with_label_disabled(self.disable_labels)
             .with_verbosity(verbosity);
         // Signatures are of no value for gas reports.
         if !self.gas_report {
@@ -559,12 +730,11 @@ impl TestArgs {
 
         let mut gas_snapshots = BTreeMap::<String, BTreeMap<String, String>>::new();
 
-        let mut outcome = TestOutcome::empty(None, self.allow_failure);
+        let mut outcome = TestOutcome::empty(self.allow_failure);
 
         let mut any_test_failed = false;
-        let mut backtrace_builder = None;
-        for (contract_name, mut suite_result) in rx {
-            let tests = &mut suite_result.test_results;
+        for (contract_name, suite_result) in rx {
+            let tests = &suite_result.test_results;
 
             // Clear the addresses and labels from previous test.
             decoder.clear_addresses();
@@ -623,11 +793,13 @@ impl TestArgs {
 
                 // Clear the addresses and labels from previous runs.
                 decoder.clear_addresses();
-                decoder.labels.extend(result.labels.iter().map(|(k, v)| (*k, v.clone())));
+                decoder
+                    .labels
+                    .extend(result.labeled_addresses.iter().map(|(k, v)| (*k, v.clone())));
 
                 // Identify addresses and decode traces.
                 let mut decoded_traces = Vec::with_capacity(result.traces.len());
-                for (kind, arena) in &mut result.traces {
+                for (kind, arena) in &mut result.traces.clone() {
                     if identify_addresses {
                         decoder.identify(arena, &mut identifier);
                     }
@@ -660,31 +832,6 @@ impl TestArgs {
                     }
                 }
 
-                // Extract and display backtrace for failed tests when verbosity >= 3
-                if !silent
-                    && result.status.is_failure()
-                    && verbosity >= 3
-                    && !result.traces.is_empty()
-                    && let Some((_, arena)) =
-                        result.traces.iter().find(|(kind, _)| matches!(kind, TraceKind::Execution))
-                {
-                    // Lazily initialize the backtrace builder on first failure
-                    let builder = backtrace_builder.get_or_insert_with(|| {
-                        BacktraceBuilder::new(
-                            output,
-                            config.root.clone(),
-                            config.parsed_libraries().ok(),
-                            config.via_ir,
-                        )
-                    });
-
-                    let backtrace = builder.from_traces(arena);
-
-                    if !backtrace.is_empty() {
-                        sh_println!("{}", backtrace)?;
-                    }
-                }
-
                 if let Some(gas_report) = &mut gas_report {
                     gas_report.analyze(result.traces.iter().map(|(_, a)| &a.arena), &decoder).await;
 
@@ -705,8 +852,6 @@ impl TestArgs {
                         }
                     }
                 }
-                // Clear memory.
-                result.gas_report_traces = Default::default();
 
                 // Collect and merge gas snapshots.
                 for (group, new_snapshots) in &result.gas_snapshots {
@@ -840,12 +985,11 @@ impl TestArgs {
         }
 
         // Reattach the task.
-        match handle.await {
-            Ok(result) => outcome.runner = Some(result?),
-            Err(e) => match e.try_into_panic() {
+        if let Err(e) = handle.await {
+            match e.try_into_panic() {
                 Ok(payload) => std::panic::resume_unwind(payload),
                 Err(e) => return Err(e.into()),
-            },
+            }
         }
 
         // Persist test run failures to enable replaying.
@@ -914,6 +1058,10 @@ impl Provider for TestArgs {
             dict.insert("etherscan_api_key".to_string(), etherscan_api_key.to_string().into());
         }
 
+        if let Some(api_version) = &self.etherscan_api_version {
+            dict.insert("etherscan_api_version".to_string(), api_version.to_string().into());
+        }
+
         if self.show_progress {
             dict.insert("show_progress".to_string(), true.into());
         }
@@ -937,20 +1085,13 @@ fn list(runner: MultiContractRunner, filter: &ProjectPathsAwareFilter) -> Result
             }
         }
     }
-    Ok(TestOutcome::empty(Some(runner), false))
+    Ok(TestOutcome::empty(false))
 }
 
 /// Load persisted filter (with last test run failures) from file.
 fn last_run_failures(config: &Config) -> Option<regex::Regex> {
     match fs::read_to_string(&config.test_failures_file) {
-        Ok(filter) => Regex::new(&filter)
-            .inspect_err(|e| {
-                _ = sh_warn!(
-                    "failed to parse test filter from {:?}: {e}",
-                    config.test_failures_file
-                )
-            })
-            .ok(),
+        Ok(filter) => Some(Regex::new(&filter).unwrap()),
         Err(_) => None,
     }
 }

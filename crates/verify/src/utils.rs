@@ -8,7 +8,6 @@ use eyre::{OptionExt, Result};
 use foundry_block_explorers::{
     contract::{ContractCreationData, ContractMetadata, Metadata},
     errors::EtherscanError,
-    utils::lookup_compiler_version,
 };
 use foundry_common::{
     abi::encode_args, compile::ProjectCompiler, ignore_metadata_hash, provider::RetryProvider,
@@ -22,7 +21,7 @@ use foundry_evm::{
 };
 use reqwest::Url;
 use revm::{bytecode::Bytecode, database::Database, primitives::hardfork::SpecId};
-use semver::{BuildMetadata, Version};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use yansi::Paint;
 
@@ -229,7 +228,7 @@ fn find_mismatch_in_settings(
     {
         let str = format!(
             "Optimizer runs mismatch: local={}, onchain={}",
-            local_settings.optimizer_runs.map_or("unknown".to_string(), |runs| runs.to_string()),
+            local_settings.optimizer_runs.unwrap(),
             etherscan_settings.runs
         );
         mismatches.push(str);
@@ -312,7 +311,7 @@ pub async fn get_tracing_executor(
     fork_config.evm_version = evm_version;
 
     let create2_deployer = evm_opts.create2_deployer;
-    let (env, fork, _chain, networks) =
+    let (env, fork, _chain, is_odyssey) =
         TracingExecutor::get_fork_material(fork_config, evm_opts).await?;
 
     let executor = TracingExecutor::new(
@@ -320,7 +319,7 @@ pub async fn get_tracing_executor(
         fork,
         Some(fork_config.evm_version),
         TraceMode::Call,
-        networks,
+        is_odyssey,
         create2_deployer,
         None,
     )?;
@@ -410,26 +409,9 @@ pub async fn get_runtime_codes(
 /// Returns `true` if the URL only consists of host.
 ///
 /// This is used to check user input url for missing /api path
+#[inline]
 pub fn is_host_only(url: &Url) -> bool {
     matches!(url.path(), "/" | "")
-}
-
-/// Given any solc [Version] return a [Version] with build metadata
-///
-/// # Example
-///
-/// ```ignore
-/// use semver::{BuildMetadata, Version};
-/// let version = Version::new(1, 2, 3);
-/// let version = ensure_solc_build_metadata(version).await?;
-/// assert_ne!(version.build, BuildMetadata::EMPTY);
-/// ```
-pub async fn ensure_solc_build_metadata(version: Version) -> Result<Version> {
-    if version.build != BuildMetadata::EMPTY {
-        Ok(version)
-    } else {
-        Ok(lookup_compiler_version(&version).await?)
-    }
 }
 
 #[cfg(test)]

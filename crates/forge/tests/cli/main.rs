@@ -4,8 +4,6 @@ extern crate foundry_test_utils;
 pub mod constants;
 pub mod utils;
 
-mod backtrace;
-mod bind;
 mod bind_json;
 mod build;
 mod cache;
@@ -19,11 +17,11 @@ mod debug;
 mod doc;
 mod eip712;
 mod failure_assertions;
+mod geiger;
 mod inline_config;
 mod install;
 mod lint;
 mod multi_script;
-mod precompiles;
 mod script;
 mod soldeer;
 mod svm;
@@ -33,6 +31,4 @@ mod verify_bytecode;
 mod version;
 
 mod ext_integration;
-mod fmt;
-mod fmt_integration;
 mod test_optimizer;

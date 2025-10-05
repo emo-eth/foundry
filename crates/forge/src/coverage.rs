@@ -1,11 +1,9 @@
 //! Coverage reports.
 
 use alloy_primitives::map::{HashMap, HashSet};
-use comfy_table::{
-    Attribute, Cell, Color, Row, Table, modifiers::UTF8_ROUND_CORNERS, presets::ASCII_MARKDOWN,
-};
+use comfy_table::{Attribute, Cell, Color, Row, Table, modifiers::UTF8_ROUND_CORNERS};
 use evm_disassembler::disassemble_bytes;
-use foundry_common::{fs, shell};
+use foundry_common::fs;
 use semver::Version;
 use std::{
     collections::hash_map,
@@ -17,9 +15,6 @@ pub use foundry_evm::coverage::*;
 
 /// A coverage reporter.
 pub trait CoverageReporter {
-    /// Returns a debug string for the reporter.
-    fn name(&self) -> &'static str;
-
     /// Returns `true` if the reporter needs source maps for the final report.
     fn needs_source_maps(&self) -> bool {
         false
@@ -40,11 +35,7 @@ pub struct CoverageSummaryReporter {
 impl Default for CoverageSummaryReporter {
     fn default() -> Self {
         let mut table = Table::new();
-        if shell::is_markdown() {
-            table.load_preset(ASCII_MARKDOWN);
-        } else {
-            table.apply_modifier(UTF8_ROUND_CORNERS);
-        }
+        table.apply_modifier(UTF8_ROUND_CORNERS);
 
         table.set_header(vec![
             Cell::new("File"),
@@ -71,10 +62,6 @@ impl CoverageSummaryReporter {
 }
 
 impl CoverageReporter for CoverageSummaryReporter {
-    fn name(&self) -> &'static str {
-        "summary"
-    }
-
     fn report(&mut self, report: &CoverageReport) -> eyre::Result<()> {
         for (path, summary) in report.summary_by_file() {
             self.total.merge(&summary);
@@ -121,10 +108,6 @@ impl LcovReporter {
 }
 
 impl CoverageReporter for LcovReporter {
-    fn name(&self) -> &'static str {
-        "lcov"
-    }
-
     fn report(&mut self, report: &CoverageReport) -> eyre::Result<()> {
         let mut out = std::io::BufWriter::new(fs::create_file(&self.path)?);
 
@@ -166,8 +149,11 @@ impl CoverageReporter for LcovReporter {
                         }
                     }
                     CoverageItemKind::Branch { branch_id, path_id, .. } => {
-                        let hits_str = if hits == 0 { "-" } else { &hits.to_string() };
-                        writeln!(out, "BRDA:{line},{branch_id},{path_id},{hits_str}")?;
+                        writeln!(
+                            out,
+                            "BRDA:{line},{branch_id},{path_id},{}",
+                            if hits == 0 { "-".to_string() } else { hits.to_string() }
+                        )?;
                     }
                 }
             }
@@ -198,34 +184,33 @@ impl CoverageReporter for LcovReporter {
 pub struct DebugReporter;
 
 impl CoverageReporter for DebugReporter {
-    fn name(&self) -> &'static str {
-        "debug"
-    }
-
     fn report(&mut self, report: &CoverageReport) -> eyre::Result<()> {
         for (path, items) in report.items_by_file() {
-            let src = fs::read_to_string(path)?;
-            sh_println!("{}:", path.display())?;
+            sh_println!("Uncovered for {}:", path.display())?;
             for item in items {
-                sh_println!("- {}", item.fmt_with_source(Some(&src)))?;
+                if item.hits == 0 {
+                    sh_println!("- {item}")?;
+                }
             }
             sh_println!()?;
         }
 
-        for (contract_id, (cta, rta)) in &report.anchors {
-            if cta.is_empty() && rta.is_empty() {
-                continue;
-            }
-
+        for (contract_id, anchors) in &report.anchors {
             sh_println!("Anchors for {contract_id}:")?;
-            let anchors = cta
+            let anchors = anchors
+                .0
                 .iter()
                 .map(|anchor| (false, anchor))
-                .chain(rta.iter().map(|anchor| (true, anchor)));
-            for (is_runtime, anchor) in anchors {
-                let kind = if is_runtime { " runtime" } else { "creation" };
+                .chain(anchors.1.iter().map(|anchor| (true, anchor)));
+            for (is_deployed, anchor) in anchors {
+                sh_println!("- {anchor}")?;
+                if is_deployed {
+                    sh_println!("- Creation code")?;
+                } else {
+                    sh_println!("- Runtime code")?;
+                }
                 sh_println!(
-                    "- {kind} {anchor}: {}",
+                    "  - Refers to item: {}",
                     report
                         .analyses
                         .get(&contract_id.version)
@@ -252,10 +237,6 @@ impl BytecodeReporter {
 }
 
 impl CoverageReporter for BytecodeReporter {
-    fn name(&self) -> &'static str {
-        "bytecode"
-    }
-
     fn needs_source_maps(&self) -> bool {
         true
     }

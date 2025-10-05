@@ -31,6 +31,8 @@
               dprint
               nodejs
             ];
+            buildInputs = lib.optionals pkgs.stdenv.isDarwin
+              [ pkgs.darwin.apple_sdk.frameworks.AppKit ];
 
             packages = with pkgs; [ rust-analyzer-unwrapped ];
 

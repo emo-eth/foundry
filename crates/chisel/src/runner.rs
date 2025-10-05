@@ -48,7 +48,7 @@ pub struct ChiselResult {
     /// Called address
     pub address: Option<Address>,
     /// EVM State at the final instruction of the `run()` function
-    pub state: Option<(Vec<U256>, Vec<u8>)>,
+    pub state: Option<(Vec<U256>, Vec<u8>, Option<InstructionResult>)>,
 }
 
 /// ChiselRunner implementation
@@ -184,9 +184,7 @@ impl ChiselRunner {
                 cheatcodes.fs_commit = !cheatcodes.fs_commit;
             }
 
-            if !commit {
-                res = self.executor.call_raw(from, to, calldata.clone(), value)?;
-            }
+            res = self.executor.call_raw(from, to, calldata.clone(), value)?;
         }
 
         if commit {
@@ -201,7 +199,13 @@ impl ChiselRunner {
             success: !reverted,
             gas_used,
             logs,
-            traces: traces.map(|traces| vec![(TraceKind::Execution, traces)]).unwrap_or_default(),
+            traces: traces
+                .map(|traces| {
+                    // Manually adjust gas for the trace to add back the stipend/real used gas
+
+                    vec![(TraceKind::Execution, traces)]
+                })
+                .unwrap_or_default(),
             labeled_addresses: labels,
             address: None,
             state: chisel_state,

@@ -1,7 +1,8 @@
 contract ThisExpression {
     function someFunc() public {}
     function someVeryVeryVeryLongVariableNameThatWillBeAccessedByThisKeyword()
-        public {}
+        public
+    {}
 
     function test() external {
         this.someFunc();
@@ -12,7 +13,8 @@ contract ThisExpression {
 
         address thisAddress = address(
             // comment2
-            /* comment3 */ this // comment 4
+            /* comment3 */
+            this // comment 4
         );
     }
 }

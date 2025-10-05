@@ -35,6 +35,7 @@ async fn test_deposits_not_supported_if_optimism_disabled() {
         deposit_receipt_version: None,
     };
 
+    // TODO: Test this
     let other = serde_json::to_value(op_fields).unwrap().try_into().unwrap();
 
     let tx = WithOtherFields { inner: tx, other };

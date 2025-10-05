@@ -5,12 +5,14 @@ use crate::eth::backend::db::{
 use alloy_primitives::{Address, B256, U256, map::HashMap};
 use alloy_rpc_types::BlockId;
 use foundry_evm::{
-    backend::{BlockchainDb, DatabaseResult, RevertStateSnapshotAction, StateSnapshot},
+    backend::{
+        BlockchainDb, DatabaseError, DatabaseResult, RevertStateSnapshotAction, StateSnapshot,
+    },
     fork::database::ForkDbStateSnapshot,
 };
 use revm::{
     context::BlockEnv,
-    database::{Database, DbAccount},
+    database::{Database, DatabaseRef, DbAccount},
     state::AccountInfo,
 };
 
@@ -87,6 +89,10 @@ impl Db for ForkedDatabase {
 }
 
 impl MaybeFullDatabase for ForkedDatabase {
+    fn as_dyn(&self) -> &dyn DatabaseRef<Error = DatabaseError> {
+        self
+    }
+
     fn maybe_as_full_db(&self) -> Option<&HashMap<Address, DbAccount>> {
         Some(&self.database().cache.accounts)
     }
@@ -122,6 +128,10 @@ impl MaybeFullDatabase for ForkedDatabase {
 }
 
 impl MaybeFullDatabase for ForkDbStateSnapshot {
+    fn as_dyn(&self) -> &dyn DatabaseRef<Error = DatabaseError> {
+        self
+    }
+
     fn maybe_as_full_db(&self) -> Option<&HashMap<Address, DbAccount>> {
         Some(&self.local.cache.accounts)
     }

@@ -1,13 +1,10 @@
 use super::{UncheckedCall, UncheckedTransferERC20};
 use crate::{
-    linter::{EarlyLintPass, LateLintPass, LintContext},
+    linter::{EarlyLintPass, LintContext},
     sol::{Severity, SolLint},
 };
-use solar::{
-    ast::{Expr, ExprKind, ItemFunction, Stmt, StmtKind, visit::Visit},
-    interface::kw,
-    sema::hir::{self},
-};
+use solar_ast::{Expr, ExprKind, ItemFunction, Stmt, StmtKind, visit::Visit};
+use solar_interface::kw;
 use std::ops::ControlFlow;
 
 declare_forge_lint!(
@@ -26,97 +23,61 @@ declare_forge_lint!(
 
 // -- ERC20 UNCKECKED TRANSFERS -------------------------------------------------------------------
 
-/// Checks that calls to functions with the same signature as the ERC20 transfer methods, and which
-/// return a boolean are not ignored.
-///
-/// WARN: can issue false positives, as it doesn't check that the contract being called sticks to
-/// the full ERC20 specification.
-impl<'hir> LateLintPass<'hir> for UncheckedTransferERC20 {
-    fn check_stmt(
-        &mut self,
-        ctx: &LintContext,
-        hir: &'hir hir::Hir<'hir>,
-        stmt: &'hir hir::Stmt<'hir>,
-    ) {
-        // Only expression statements can contain unchecked transfers.
-        if let hir::StmtKind::Expr(expr) = &stmt.kind
-            && is_erc20_transfer_call(hir, expr)
-        {
-            ctx.emit(&ERC20_UNCHECKED_TRANSFER, expr.span);
+/// WARN: can issue false positives. It does not check that the contract being called is an ERC20.
+/// TODO: re-implement using `LateLintPass` so that it can't issue false positives.
+impl<'ast> EarlyLintPass<'ast> for UncheckedTransferERC20 {
+    fn check_item_function(&mut self, ctx: &LintContext<'_>, func: &'ast ItemFunction<'ast>) {
+        if let Some(body) = &func.body {
+            let mut checker = UncheckedTransferERC20Checker { ctx };
+            let _ = checker.visit_block(body);
         }
     }
 }
 
-/// Checks if an expression is an ERC20 `transfer` or `transferFrom` call.
-/// * `function transfer(address to, uint256 amount) external returns bool;`
-/// * `function transferFrom(address from, address to, uint256 amount) external returns bool;`
+/// Visitor that detects unchecked ERC20 transfer calls within function bodies.
 ///
-/// Validates the method name, the params (count + types), and the returns (count + types).
-fn is_erc20_transfer_call(hir: &hir::Hir<'_>, expr: &hir::Expr<'_>) -> bool {
-    let is_type = |var_id: hir::VariableId, type_str: &str| {
-        matches!(
-            &hir.variable(var_id).ty.kind,
-            hir::TypeKind::Elementary(ty) if ty.to_abi_str() == type_str
-        )
-    };
+/// Unchecked transfers appear as standalone expression statements.
+/// When a transfer's return value is used (in require, assignment, etc.), it's part
+/// of a larger expression and won't be flagged.
+struct UncheckedTransferERC20Checker<'a, 's> {
+    ctx: &'a LintContext<'s>,
+}
 
-    // Ensure the expression is a call to a contract member function.
-    let hir::ExprKind::Call(
-        hir::Expr { kind: hir::ExprKind::Member(contract_expr, func_ident), .. },
-        hir::CallArgs { kind: hir::CallArgsKind::Unnamed(args), .. },
-        ..,
-    ) = &expr.kind
-    else {
-        return false;
-    };
+impl<'ast> Visit<'ast> for UncheckedTransferERC20Checker<'_, '_> {
+    type BreakValue = ();
 
-    // Determine the expected ERC20 signature from the call
-    let (expected_params, expected_returns): (&[&str], &[&str]) = match func_ident.as_str() {
-        "transferFrom" if args.len() == 3 => (&["address", "address", "uint256"], &["bool"]),
-        "transfer" if args.len() == 2 => (&["address", "uint256"], &["bool"]),
-        _ => return false,
-    };
-
-    let Some(cid) = (match &contract_expr.kind {
-        // Call to pre-instantiated contract variable
-        hir::ExprKind::Ident([hir::Res::Item(hir::ItemId::Variable(id)), ..]) => {
-            if let hir::TypeKind::Custom(hir::ItemId::Contract(cid)) = hir.variable(*id).ty.kind {
-                Some(cid)
-            } else {
-                None
-            }
+    fn visit_stmt(&mut self, stmt: &'ast Stmt<'ast>) -> ControlFlow<Self::BreakValue> {
+        // Only expression statements can contain unchecked transfers.
+        if let StmtKind::Expr(expr) = &stmt.kind
+            && is_erc20_transfer_call(expr)
+        {
+            self.ctx.emit(&ERC20_UNCHECKED_TRANSFER, expr.span);
         }
-        // Call to address wrapped by the contract interface
-        hir::ExprKind::Call(
-            hir::Expr {
-                kind: hir::ExprKind::Ident([hir::Res::Item(hir::ItemId::Contract(cid))]),
-                ..
-            },
-            ..,
-        ) => Some(*cid),
-        _ => None,
-    }) else {
-        return false;
-    };
+        self.walk_stmt(stmt)
+    }
+}
 
-    // Try to find a function in the contract that matches the expected signature.
-    hir.contract_item_ids(cid).any(|item| {
-        let Some(fid) = item.as_function() else { return false };
-        let func = hir.function(fid);
-        func.name.is_some_and(|name| name.as_str() == func_ident.as_str())
-            && func.kind.is_function()
-            && func.mutates_state()
-            && func.parameters.len() == expected_params.len()
-            && func.returns.len() == expected_returns.len()
-            && func.parameters.iter().zip(expected_params).all(|(id, &ty)| is_type(*id, ty))
-            && func.returns.iter().zip(expected_returns).all(|(id, &ty)| is_type(*id, ty))
-    })
+/// Checks if an expression is an ERC20 `transfer` or `transferFrom` call.
+/// `function ERC20.transfer(to, amount)`
+/// `function ERC20.transferFrom(from, to, amount)`
+///
+/// Validates both the method name and argument count to avoid false positives
+/// from other functions that happen to be named "transfer".
+fn is_erc20_transfer_call(expr: &Expr<'_>) -> bool {
+    if let ExprKind::Call(call_expr, args) = &expr.kind {
+        // Must be a member access pattern: `token.transfer(...)`
+        if let ExprKind::Member(_, member) = &call_expr.kind {
+            return (args.len() == 2 && member.as_str() == "transfer")
+                || (args.len() == 3 && member.as_str() == "transferFrom");
+        }
+    }
+    false
 }
 
 // -- UNCKECKED LOW-LEVEL CALLS -------------------------------------------------------------------
 
 impl<'ast> EarlyLintPass<'ast> for UncheckedCall {
-    fn check_item_function(&mut self, ctx: &LintContext, func: &'ast ItemFunction<'ast>) {
+    fn check_item_function(&mut self, ctx: &LintContext<'_>, func: &'ast ItemFunction<'ast>) {
         if let Some(body) = &func.body {
             let mut checker = UncheckedCallChecker { ctx };
             let _ = checker.visit_block(body);
@@ -130,7 +91,7 @@ impl<'ast> EarlyLintPass<'ast> for UncheckedCall {
 /// statements. When the success value is checked (in require, if, etc.), the call
 /// is part of a larger expression and won't be flagged.
 struct UncheckedCallChecker<'a, 's> {
-    ctx: &'a LintContext<'s, 'a>,
+    ctx: &'a LintContext<'s>,
 }
 
 impl<'ast> Visit<'ast> for UncheckedCallChecker<'_, '_> {

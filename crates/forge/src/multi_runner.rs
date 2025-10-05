@@ -7,10 +7,7 @@ use crate::{
 use alloy_json_abi::{Function, JsonAbi};
 use alloy_primitives::{Address, Bytes, U256};
 use eyre::Result;
-use foundry_common::{
-    ContractsByArtifact, ContractsByArtifactBuilder, TestFunctionExt, get_contract_name,
-    shell::verbosity,
-};
+use foundry_common::{ContractsByArtifact, TestFunctionExt, get_contract_name, shell::verbosity};
 use foundry_compilers::{
     Artifact, ArtifactId, ProjectCompileOutput,
     artifacts::{Contract, Libraries},
@@ -21,13 +18,12 @@ use foundry_evm::{
     Env,
     backend::Backend,
     decode::RevertDecoder,
-    executors::{Executor, ExecutorBuilder, FailFast},
+    executors::{Executor, ExecutorBuilder},
     fork::CreateFork,
     inspectors::CheatsConfig,
     opts::EvmOpts,
     traces::{InternalTraceMode, TraceMode},
 };
-use foundry_evm_networks::NetworkConfigs;
 use foundry_linking::{LinkOutput, Linker};
 use rayon::prelude::*;
 use revm::primitives::hardfork::SpecId;
@@ -50,7 +46,6 @@ pub type DeployableContracts = BTreeMap<ArtifactId, TestContract>;
 
 /// A multi contract runner receives a set of contracts deployed in an EVM instance and proceeds
 /// to run all test functions in these contracts.
-#[derive(Clone, Debug)]
 pub struct MultiContractRunner {
     /// Mapping of contract name to JsonAbi, creation bytecode and library bytecode which
     /// needs to be deployed & linked against
@@ -91,7 +86,7 @@ impl MultiContractRunner {
         &'a self,
         filter: &'b dyn TestFilter,
     ) -> impl Iterator<Item = (&'a ArtifactId, &'a TestContract)> + 'b {
-        self.contracts.iter().filter(|&(id, c)| matches_artifact(filter, id, &c.abi))
+        self.contracts.iter().filter(|&(id, c)| matches_contract(id, &c.abi, filter))
     }
 
     /// Returns an iterator over all test functions that match the filter.
@@ -101,7 +96,7 @@ impl MultiContractRunner {
     ) -> impl Iterator<Item = &'a Function> + 'b {
         self.matching_contracts(filter)
             .flat_map(|(_, c)| c.abi.functions())
-            .filter(|func| filter.matches_test_function(func))
+            .filter(|func| is_matching_test(func, filter))
     }
 
     /// Returns an iterator over all test functions in contracts that match the filter.
@@ -125,7 +120,7 @@ impl MultiContractRunner {
                 let tests = c
                     .abi
                     .functions()
-                    .filter(|func| filter.matches_test_function(func))
+                    .filter(|func| is_matching_test(func, filter))
                     .map(|func| func.name.clone())
                     .collect::<Vec<_>>();
                 (source, name, tests)
@@ -275,7 +270,7 @@ impl MultiContractRunner {
 /// Configuration for the test runner.
 ///
 /// This is modified after instantiation through inline config.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TestRunnerConfig {
     /// Project config.
     pub config: Arc<Config>,
@@ -299,10 +294,8 @@ pub struct TestRunnerConfig {
     pub decode_internal: InternalTraceMode,
     /// Whether to enable call isolation.
     pub isolation: bool,
-    /// Networks with enabled features.
-    pub networks: NetworkConfigs,
-    /// Whether to exit early on test failure.
-    pub fail_fast: FailFast,
+    /// Whether to enable Odyssey features.
+    pub odyssey: bool,
 }
 
 impl TestRunnerConfig {
@@ -313,7 +306,7 @@ impl TestRunnerConfig {
 
         self.spec_id = config.evm_spec_id();
         self.sender = config.sender;
-        self.networks.celo = config.celo;
+        self.odyssey = config.odyssey;
         self.isolation = config.isolate;
 
         // Specific to Forge, not present in config.
@@ -339,7 +332,7 @@ impl TestRunnerConfig {
         inspector.tracing(self.trace_mode());
         inspector.collect_line_coverage(self.line_coverage);
         inspector.enable_isolation(self.isolation);
-        inspector.networks(self.networks);
+        inspector.odyssey(self.odyssey);
         // inspector.set_create2_deployer(self.evm_opts.create2_deployer);
 
         // executor.env_mut().clone_from(&self.env);
@@ -368,7 +361,7 @@ impl TestRunnerConfig {
                     .trace_mode(self.trace_mode())
                     .line_coverage(self.line_coverage)
                     .enable_isolation(self.isolation)
-                    .networks(self.networks)
+                    .odyssey(self.odyssey)
                     .create2_deployer(self.evm_opts.create2_deployer)
             })
             .spec_id(self.spec_id)
@@ -409,10 +402,8 @@ pub struct MultiContractRunnerBuilder {
     pub decode_internal: InternalTraceMode,
     /// Whether to enable call isolation
     pub isolation: bool,
-    /// Networks with enabled features.
-    pub networks: NetworkConfigs,
-    /// Whether to exit early on test failure.
-    pub fail_fast: bool,
+    /// Whether to enable Odyssey features.
+    pub odyssey: bool,
 }
 
 impl MultiContractRunnerBuilder {
@@ -427,8 +418,7 @@ impl MultiContractRunnerBuilder {
             debug: Default::default(),
             isolation: Default::default(),
             decode_internal: Default::default(),
-            networks: Default::default(),
-            fail_fast: false,
+            odyssey: Default::default(),
         }
     }
 
@@ -467,18 +457,13 @@ impl MultiContractRunnerBuilder {
         self
     }
 
-    pub fn fail_fast(mut self, fail_fast: bool) -> Self {
-        self.fail_fast = fail_fast;
-        self
-    }
-
     pub fn enable_isolation(mut self, enable: bool) -> Self {
         self.isolation = enable;
         self
     }
 
-    pub fn networks(mut self, networks: NetworkConfigs) -> Self {
-        self.networks = networks;
+    pub fn odyssey(mut self, enable: bool) -> Self {
+        self.odyssey = enable;
         self
     }
 
@@ -511,20 +496,18 @@ impl MultiContractRunnerBuilder {
             linker.contracts.keys(),
         )?;
 
-        let linked_contracts = linker.get_linked_artifacts_cow(&libraries)?;
+        let linked_contracts = linker.get_linked_artifacts(&libraries)?;
 
         // Create a mapping of name => (abi, deployment code, Vec<library deployment code>)
         let mut deployable_contracts = DeployableContracts::default();
 
         for (id, contract) in linked_contracts.iter() {
-            let Some(abi) = contract.abi.as_ref() else { continue };
+            let Some(abi) = &contract.abi else { continue };
 
             // if it's a test, link it and add to deployable contracts
             if abi.constructor.as_ref().map(|c| c.inputs.is_empty()).unwrap_or(true)
                 && abi.functions().any(|func| func.name.is_any_test())
             {
-                linker.ensure_linked(contract, id)?;
-
                 let Some(bytecode) =
                     contract.get_bytecode_bytes().map(|b| b.into_owned()).filter(|b| !b.is_empty())
                 else {
@@ -532,13 +515,11 @@ impl MultiContractRunnerBuilder {
                 };
 
                 deployable_contracts
-                    .insert(id.clone(), TestContract { abi: abi.clone().into_owned(), bytecode });
+                    .insert(id.clone(), TestContract { abi: abi.clone(), bytecode });
             }
         }
 
-        // Create known contracts from linked contracts and storage layout information (if any).
-        let known_contracts =
-            ContractsByArtifactBuilder::new(linked_contracts).with_output(output, root).build();
+        let known_contracts = ContractsByArtifact::new(linked_contracts);
 
         Ok(MultiContractRunner {
             contracts: deployable_contracts,
@@ -554,29 +535,26 @@ impl MultiContractRunnerBuilder {
                 env,
                 spec_id: self.evm_spec.unwrap_or_else(|| self.config.evm_spec_id()),
                 sender: self.sender.unwrap_or(self.config.sender),
+
                 line_coverage: self.line_coverage,
                 debug: self.debug,
                 decode_internal: self.decode_internal,
                 inline_config: Arc::new(InlineConfig::new_parsed(output, &self.config)?),
                 isolation: self.isolation,
-                networks: self.networks,
+                odyssey: self.odyssey,
+
                 config: self.config,
-                fail_fast: FailFast::new(self.fail_fast),
             },
         })
     }
 }
 
-pub fn matches_artifact(filter: &dyn TestFilter, id: &ArtifactId, abi: &JsonAbi) -> bool {
-    matches_contract(filter, &id.source, &id.name, abi.functions())
+pub fn matches_contract(id: &ArtifactId, abi: &JsonAbi, filter: &dyn TestFilter) -> bool {
+    (filter.matches_path(&id.source) && filter.matches_contract(&id.name))
+        && abi.functions().any(|func| is_matching_test(func, filter))
 }
 
-pub(crate) fn matches_contract(
-    filter: &dyn TestFilter,
-    path: &Path,
-    contract_name: &str,
-    functions: impl IntoIterator<Item = impl std::borrow::Borrow<Function>>,
-) -> bool {
-    (filter.matches_path(path) && filter.matches_contract(contract_name))
-        && functions.into_iter().any(|func| filter.matches_test_function(func.borrow()))
+/// Returns `true` if the function is a test function that matches the given filter.
+pub(crate) fn is_matching_test(func: &Function, filter: &dyn TestFilter) -> bool {
+    func.is_any_test() && filter.matches_test(&func.signature())
 }

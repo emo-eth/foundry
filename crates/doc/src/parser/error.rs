@@ -1,4 +1,4 @@
-use solar::interface::diagnostics::EmittedDiagnostics;
+use forge_fmt::FormatterError;
 use thiserror::Error;
 
 /// The parser error.
@@ -7,7 +7,7 @@ use thiserror::Error;
 pub enum ParserError {
     /// Formatter error.
     #[error(transparent)]
-    Formatter(EmittedDiagnostics),
+    Formatter(#[from] FormatterError),
     /// Internal parser error.
     #[error(transparent)]
     Internal(#[from] eyre::Error),

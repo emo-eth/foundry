@@ -62,7 +62,7 @@ pub enum ForgeSubcommand {
     /// Install one or multiple dependencies.
     ///
     /// If no arguments are provided, then existing dependencies will be installed.
-    #[command(visible_aliases = ["i", "add"])]
+    #[command(visible_alias = "i")]
     Install(InstallArgs),
 
     /// Remove one or multiple dependencies.
@@ -96,8 +96,12 @@ pub enum ForgeSubcommand {
     #[command(visible_alias = "com")]
     Completions {
         #[arg(value_enum)]
-        shell: foundry_cli::clap::Shell,
+        shell: clap_complete::Shell,
     },
+
+    /// Generate Fig autocompletion spec.
+    #[command(visible_alias = "fig")]
+    GenerateFigSpec,
 
     /// Remove the build artifacts and cache directories.
     #[command(visible_alias = "cl")]
@@ -140,9 +144,7 @@ pub enum ForgeSubcommand {
     #[command(visible_alias = "tr")]
     Tree(tree::TreeArgs),
 
-    /// DEPRECATED: Detects usage of unsafe cheat codes in a project and its dependencies.
-    ///
-    /// This is an alias for `forge lint --only-lint unsafe-cheatcode`.
+    /// Detects usage of unsafe cheat codes in a project and its dependencies.
     Geiger(geiger::GeigerArgs),
 
     /// Generate documentation for the project.
@@ -156,7 +158,6 @@ pub enum ForgeSubcommand {
     },
 
     /// Generate scaffold files.
-    #[command(hide = true)]
     Generate(generate::GenerateArgs),
 
     /// Compiler utilities.

@@ -78,17 +78,10 @@ pub struct WalletOpts {
     pub trezor: bool,
 
     /// Use AWS Key Management Service.
-    ///
-    /// Ensure the AWS_KMS_KEY_ID environment variable is set.
     #[arg(long, help_heading = "Wallet options - remote", hide = !cfg!(feature = "aws-kms"))]
     pub aws: bool,
 
     /// Use Google Cloud Key Management Service.
-    ///
-    /// Ensure the following environment variables are set: GCP_PROJECT_ID, GCP_LOCATION,
-    /// GCP_KEY_RING, GCP_KEY_NAME, GCP_KEY_VERSION.
-    ///
-    /// See: <https://cloud.google.com/kms/docs>
     #[arg(long, help_heading = "Wallet options - remote", hide = !cfg!(feature = "gcp-kms"))]
     pub gcp: bool,
 }
@@ -97,11 +90,6 @@ impl WalletOpts {
     pub async fn signer(&self) -> Result<WalletSigner> {
         trace!("start finding signer");
 
-        let get_env = |key: &str| {
-            std::env::var(key)
-                .map_err(|_| eyre::eyre!("{key} environment variable is required for signer"))
-        };
-
         let signer = if self.ledger {
             utils::create_ledger_signer(self.raw.hd_path.as_deref(), self.raw.mnemonic_index)
                 .await?
@@ -109,16 +97,14 @@ impl WalletOpts {
             utils::create_trezor_signer(self.raw.hd_path.as_deref(), self.raw.mnemonic_index)
                 .await?
         } else if self.aws {
-            let key_id = get_env("AWS_KMS_KEY_ID")?;
+            let key_id = std::env::var("AWS_KMS_KEY_ID")?;
             WalletSigner::from_aws(key_id).await?
         } else if self.gcp {
-            let project_id = get_env("GCP_PROJECT_ID")?;
-            let location = get_env("GCP_LOCATION")?;
-            let keyring = get_env("GCP_KEYRING")?;
-            let key_name = get_env("GCP_NAME")?;
-            let key_version = get_env("GCP_KEY_VERSION")?
-                .parse()
-                .map_err(|_| eyre::eyre!("GCP_KEY_VERSION could not be parsed into u64"))?;
+            let project_id = std::env::var("GCP_PROJECT_ID")?;
+            let location = std::env::var("GCP_LOCATION")?;
+            let keyring = std::env::var("GCP_KEYRING")?;
+            let key_name = std::env::var("GCP_KEY_NAME")?;
+            let key_version = std::env::var("GCP_KEY_VERSION")?.parse()?;
             WalletSigner::from_gcp(project_id, location, keyring, key_name, key_version).await?
         } else if let Some(raw_wallet) = self.raw.signer()? {
             raw_wallet
@@ -141,20 +127,10 @@ impl WalletOpts {
         } else {
             eyre::bail!(
                 "\
-Error accessing local wallet. Did you pass a keystore, hardware wallet, private key or mnemonic?
-
+Error accessing local wallet. Did you set a private key, mnemonic or keystore?
 Run the command with --help flag for more information or use the corresponding CLI
 flag to set your key via:
-
---keystore
---interactive
---private-key
---mnemonic-path
---aws
---gcp
---trezor
---ledger
-
+--private-key, --mnemonic-path, --aws, --gcp, --interactive, --trezor or --ledger.
 Alternatively, when using the `cast send` or `cast mktx` commands with a local node
 or RPC that has unlocked accounts, the --unlocked or --ethsign flags can be used,
 respectively. The sender address can be specified by setting the `ETH_FROM` environment

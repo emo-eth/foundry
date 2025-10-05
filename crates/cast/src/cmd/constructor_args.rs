@@ -1,16 +1,16 @@
-use super::{creation_code::fetch_creation_code_from_etherscan, interface::load_abi_from_file};
+use super::{
+    creation_code::fetch_creation_code_from_etherscan,
+    interface::{fetch_abi_from_etherscan, load_abi_from_file},
+};
 use alloy_dyn_abi::DynSolType;
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider;
-use clap::Parser;
+use clap::{Parser, command};
 use eyre::{OptionExt, Result, eyre};
 use foundry_cli::{
     opts::{EtherscanOpts, RpcOpts},
-    utils::{self, LoadConfig, fetch_abi_from_etherscan},
+    utils::{self, LoadConfig},
 };
-use foundry_config::Config;
-
-foundry_config::impl_figment_convert!(ConstructorArgsArgs, etherscan, rpc);
 
 /// CLI arguments for `cast creation-args`.
 #[derive(Parser)]
@@ -32,16 +32,16 @@ pub struct ConstructorArgsArgs {
 
 impl ConstructorArgsArgs {
     pub async fn run(self) -> Result<()> {
-        let mut config = self.load_config()?;
+        let Self { contract, mut etherscan, rpc, abi_path } = self;
 
-        let Self { contract, abi_path, etherscan: _, rpc: _ } = self;
-
+        let config = rpc.load_config()?;
         let provider = utils::get_provider(&config)?;
-        config.chain = Some(provider.get_chain_id().await?.into());
+        let chain = provider.get_chain_id().await?;
+        etherscan.chain = Some(chain.into());
 
-        let bytecode = fetch_creation_code_from_etherscan(contract, &config, provider).await?;
+        let bytecode = fetch_creation_code_from_etherscan(contract, &etherscan, provider).await?;
 
-        let args_arr = parse_constructor_args(bytecode, contract, &config, abi_path).await?;
+        let args_arr = parse_constructor_args(bytecode, contract, &etherscan, abi_path).await?;
         for arg in args_arr {
             let _ = sh_println!("{arg}");
         }
@@ -54,13 +54,13 @@ impl ConstructorArgsArgs {
 async fn parse_constructor_args(
     bytecode: Bytes,
     contract: Address,
-    config: &Config,
+    etherscan: &EtherscanOpts,
     abi_path: Option<String>,
 ) -> Result<Vec<String>> {
     let abi = if let Some(abi_path) = abi_path {
         load_abi_from_file(&abi_path, None)?
     } else {
-        fetch_abi_from_etherscan(contract, config).await?
+        fetch_abi_from_etherscan(contract, etherscan).await?
     };
 
     let abi = abi.into_iter().next().ok_or_eyre("No ABI found.")?;
@@ -73,27 +73,21 @@ async fn parse_constructor_args(
     }
 
     let args_size = constructor.inputs.len() * 32;
-    if bytecode.len() < args_size {
-        return Err(eyre!(
-            "Invalid creation bytecode length: have {} bytes, need at least {} for {} constructor inputs",
-            bytecode.len(),
-            args_size,
-            constructor.inputs.len()
-        ));
-    }
     let args_bytes = Bytes::from(bytecode[bytecode.len() - args_size..].to_vec());
 
     let display_args: Vec<String> = args_bytes
         .chunks(32)
         .enumerate()
-        .map(|(i, arg)| format_arg(&constructor.inputs[i].ty, arg))
-        .collect::<Result<Vec<_>>>()?;
+        .map(|(i, arg)| {
+            format_arg(&constructor.inputs[i].ty, arg).expect("Failed to format argument.")
+        })
+        .collect();
 
     Ok(display_args)
 }
 
 fn format_arg(ty: &str, arg: &[u8]) -> Result<String> {
-    let arg_type: DynSolType = ty.parse()?;
+    let arg_type: DynSolType = ty.parse().expect("Invalid ABI type.");
     let decoded = arg_type.abi_decode(arg)?;
     let bytes = Bytes::from(arg.to_vec());
 

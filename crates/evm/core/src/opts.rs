@@ -9,7 +9,6 @@ use alloy_provider::{Provider, network::AnyRpcBlock};
 use eyre::WrapErr;
 use foundry_common::{ALCHEMY_FREE_TIER_CUPS, provider::ProviderBuilder};
 use foundry_config::{Chain, Config, GasLimit};
-use foundry_evm_networks::NetworkConfigs;
 use revm::context::{BlockEnv, TxEnv};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -73,12 +72,8 @@ pub struct EvmOpts {
     /// Whether to disable block gas limit checks.
     pub disable_block_gas_limit: bool,
 
-    /// Whether to enable tx gas limit checks as imposed by Osaka (EIP-7825).
-    pub enable_tx_gas_limit: bool,
-
-    #[serde(flatten)]
-    /// Networks with enabled features.
-    pub networks: NetworkConfigs,
+    /// whether to enable Odyssey features.
+    pub odyssey: bool,
 
     /// The CREATE2 deployer's address.
     pub create2_deployer: Address,
@@ -104,8 +99,7 @@ impl Default for EvmOpts {
             memory_limit: 0,
             isolate: false,
             disable_block_gas_limit: false,
-            enable_tx_gas_limit: false,
-            networks: NetworkConfigs::default(),
+            odyssey: false,
             create2_deployer: DEFAULT_CREATE2_DEPLOYER,
         }
     }
@@ -138,7 +132,6 @@ impl EvmOpts {
             self.fork_block_number,
             self.sender,
             self.disable_block_gas_limit,
-            self.enable_tx_gas_limit,
         )
         .await
         .wrap_err_with(|| {
@@ -158,7 +151,6 @@ impl EvmOpts {
             self.env.chain_id.unwrap_or(foundry_common::DEV_CHAIN_ID),
             self.memory_limit,
             self.disable_block_gas_limit,
-            self.enable_tx_gas_limit,
         );
 
         crate::Env {

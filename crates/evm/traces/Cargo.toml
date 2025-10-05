@@ -41,10 +41,8 @@ tokio = { workspace = true, features = ["time", "macros"] }
 tracing.workspace = true
 tempfile.workspace = true
 rayon.workspace = true
-solar.workspace = true
+solar-parse.workspace = true
 revm.workspace = true
-yansi.workspace = true
-memchr.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

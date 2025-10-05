@@ -11,7 +11,8 @@ function emitEvent() {
         endTimestamp
     );
 
-    emit NewEvent( /* beneficiary */
+    emit NewEvent(
+        /* beneficiary */
         beneficiary,
         /* index */
         _vestingBeneficiaries.length - 1,

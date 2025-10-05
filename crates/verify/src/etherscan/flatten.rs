@@ -1,8 +1,7 @@
 use super::{EtherscanSourceProvider, VerifyArgs};
 use crate::provider::VerificationContext;
-use eyre::Result;
+use eyre::{Context, Result};
 use foundry_block_explorers::verify::CodeFormat;
-use foundry_common::flatten;
 use foundry_compilers::{
     AggregatedCompilerOutput,
     artifacts::{BytecodeHash, Source, Sources},
@@ -33,15 +32,18 @@ impl EtherscanSourceProvider for EtherscanFlattenedSource {
             bch,
         );
 
-        let flattened_source = flatten(context.project.clone(), &context.target_path)?;
+        let source = context
+            .project
+            .paths
+            .clone()
+            .with_language::<SolcLanguage>()
+            .flatten(&context.target_path)
+            .wrap_err("Failed to flatten contract")?;
+
         if !args.force {
             // solc dry run of flattened code
-            self.check_flattened(
-                flattened_source.clone(),
-                &context.compiler_version,
-                &context.target_path,
-            )
-            .map_err(|err| {
+            self.check_flattened(source.clone(), &context.compiler_version, &context.target_path)
+                .map_err(|err| {
                 eyre::eyre!(
                     "Failed to compile the flattened code locally: `{}`\
             To skip this solc dry, have a look at the `--force` flag of this command.",
@@ -50,7 +52,7 @@ impl EtherscanSourceProvider for EtherscanFlattenedSource {
             })?;
         }
 
-        Ok((flattened_source, context.target_name.clone(), CodeFormat::SingleFile))
+        Ok((source, context.target_name.clone(), CodeFormat::SingleFile))
     }
 }
 

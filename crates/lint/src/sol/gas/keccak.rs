@@ -3,11 +3,9 @@ use crate::{
     linter::{LateLintPass, LintContext},
     sol::{Severity, SolLint},
 };
-use solar::{
-    ast::{self as ast, Span},
-    interface::kw,
-    sema::hir::{self},
-};
+use solar_ast::{self as ast, Span};
+use solar_interface::kw;
+use solar_sema::hir::{self};
 
 declare_forge_lint!(
     ASM_KECCAK256,
@@ -19,7 +17,7 @@ declare_forge_lint!(
 impl<'hir> LateLintPass<'hir> for AsmKeccak256 {
     fn check_stmt(
         &mut self,
-        ctx: &LintContext,
+        ctx: &LintContext<'_>,
         hir: &'hir hir::Hir<'hir>,
         stmt: &'hir hir::Stmt<'hir>,
     ) {
@@ -63,7 +61,7 @@ impl AsmKeccak256 {
     /// Emits lints (when possible with fix suggestions) for inefficient `keccak256` calls.
     fn emit_lint(
         &self,
-        ctx: &LintContext,
+        ctx: &LintContext<'_>,
         _hir: &hir::Hir<'_>,
         _stmt_span: Span,
         call: &hir::Expr<'_>,

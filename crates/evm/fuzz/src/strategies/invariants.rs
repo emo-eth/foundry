@@ -1,7 +1,7 @@
 use super::{fuzz_calldata, fuzz_param_from_state};
 use crate::{
-    BasicTxDetails, CallDetails, FuzzFixtures,
-    invariant::{FuzzRunIdentifiedContracts, SenderFilters},
+    FuzzFixtures,
+    invariant::{BasicTxDetails, CallDetails, FuzzRunIdentifiedContracts, SenderFilters},
     strategies::{EvmFuzzState, fuzz_calldata_from_state, fuzz_param},
 };
 use alloy_json_abi::Function;
@@ -97,20 +97,9 @@ fn select_random_sender(
             100 - dictionary_weight => fuzz_param(&alloy_dyn_abi::DynSolType::Address),
             dictionary_weight => fuzz_param_from_state(&alloy_dyn_abi::DynSolType::Address, fuzz_state),
         ]
-        .prop_map(move |addr| {
-            let mut addr = addr.as_address().unwrap();
-            // Make sure the selected address is not in the list of excluded senders.
-            // We don't use proptest's filter to avoid reaching the `PROPTEST_MAX_LOCAL_REJECTS`
-            // max rejects and exiting test before all runs completes.
-            // See <https://github.com/foundry-rs/foundry/issues/11369>.
-            loop {
-                if !senders.excluded.contains(&addr) {
-                    break;
-                }
-                addr = Address::random();
-            }
-            addr
-        })
+        .prop_map(move |addr| addr.as_address().unwrap())
+        // Too many exclusions can slow down testing.
+        .prop_filter("excluded sender", move |addr| !senders.excluded.contains(addr))
         .boxed()
     }
 }

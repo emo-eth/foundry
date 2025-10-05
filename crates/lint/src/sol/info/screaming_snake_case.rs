@@ -1,9 +1,9 @@
 use super::ScreamingSnakeCase;
 use crate::{
-    linter::{EarlyLintPass, LintContext, Suggestion},
+    linter::{EarlyLintPass, LintContext},
     sol::{Severity, SolLint},
 };
-use solar::ast::{VarMut, VariableDefinition};
+use solar_ast::{VarMut, VariableDefinition};
 
 declare_forge_lint!(
     SCREAMING_SNAKE_CASE_CONSTANT,
@@ -22,43 +22,29 @@ declare_forge_lint!(
 impl<'ast> EarlyLintPass<'ast> for ScreamingSnakeCase {
     fn check_variable_definition(
         &mut self,
-        ctx: &LintContext,
+        ctx: &LintContext<'_>,
         var: &'ast VariableDefinition<'ast>,
     ) {
-        if let (Some(name), Some(mutability)) = (var.name, var.mutability)
-            && let Some(expected) = check_screaming_snake_case(name.as_str())
-        {
-            let suggestion = Suggestion::fix(
-                expected,
-                solar::interface::diagnostics::Applicability::MachineApplicable,
-            )
-            .with_desc("consider using");
+        if let (Some(name), Some(mutability)) = (var.name, var.mutability) {
+            let name_str = name.as_str();
+            if name_str.len() < 2 || is_screaming_snake_case(name_str) {
+                return;
+            }
 
             match mutability {
-                VarMut::Constant => {
-                    ctx.emit_with_suggestion(&SCREAMING_SNAKE_CASE_CONSTANT, name.span, suggestion)
-                }
-                VarMut::Immutable => {
-                    ctx.emit_with_suggestion(&SCREAMING_SNAKE_CASE_IMMUTABLE, name.span, suggestion)
-                }
+                VarMut::Constant => ctx.emit(&SCREAMING_SNAKE_CASE_CONSTANT, name.span),
+                VarMut::Immutable => ctx.emit(&SCREAMING_SNAKE_CASE_IMMUTABLE, name.span),
             }
         }
     }
 }
 
-/// If the string `s` is not SCREAMING_SNAKE_CASE, returns a `Some(String)` with the suggested
-/// conversion. Otherwise, returns `None`.
-pub fn check_screaming_snake_case(s: &str) -> Option<String> {
+/// Check if a string is SCREAMING_SNAKE_CASE. Numbers don't need to be preceded by an underscore.
+pub fn is_screaming_snake_case(s: &str) -> bool {
     if s.len() <= 1 {
-        return None;
+        return true;
     }
 
-    // Handle leading/trailing underscores like `heck` does
-    let expected = format!(
-        "{prefix}{name}{suffix}",
-        prefix = if s.starts_with("_") { "_" } else { "" },
-        name = heck::AsShoutySnakeCase(s),
-        suffix = if s.ends_with("_") { "_" } else { "" }
-    );
-    if s == expected { None } else { Some(expected) }
+    // Remove leading/trailing underscores like `heck` does
+    s.trim_matches('_') == format!("{}", heck::AsShoutySnakeCase(s)).as_str()
 }
